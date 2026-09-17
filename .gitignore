@@ -1,0 +1,40 @@
+# Secrets and local deployment configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# User data, runtime state, and model weights
+data/
+uploads/
+backups/
+models/
+*.gguf
+*.sqlite
+*.sqlite3
+*.dump
+*.pcap
+*.pcapng
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Frontend/build outputs
+node_modules/
+dist/
+coverage/
+
+# Local editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
