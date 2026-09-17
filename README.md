@@ -6,11 +6,12 @@ A Computer Networks project: a centralized, privately hosted AI learning platfor
 
 ## Deployment decisions
 
-- Dedicated physical server, not a server VM.
-- Ubuntu 26.04 LTS and CasaOS, as reported by the server owner.
-- Intel Core i9-9900K, 32 GB RAM, NVIDIA RTX 2080 Ti.
-- Existing Ollama Docker container on port 11434; reuse it rather than creating a second inference service.
-- At least two separate client VMs, each with a browser and Tailscale, simulate different students.
+- Stage 1: validate the complete system in three VMs: one Ubuntu server VM and two client VMs.
+- The server VM runs the application, databases, private storage, and its own Ollama container. The lab does not depend on the physical server for inference.
+- Each client VM has a browser and Tailscale and uses a separate student account.
+- Stage 2: after lab acceptance, deploy the same application stack to the dedicated physical server.
+- Physical target: Ubuntu 26.04 LTS with CasaOS, Intel Core i9-9900K, 32 GB RAM, and NVIDIA RTX 2080 Ti, as reported by the server owner.
+- On the physical target, reuse the existing Ollama Docker container on port 11434 rather than creating a second inference service.
 - HTTPS access within the tailnet. No public website or Tailscale Funnel in the initial deployment.
 
 Server configuration, GPU utilization, available disk space, and installed model versions have not yet been inspected remotely.
@@ -21,13 +22,13 @@ Server configuration, GPU utilization, available disk space, and installed model
 flowchart TD
     A[Client VM A: browser + Tailscale] -->|HTTPS over Tailscale| TS
     B[Client VM B: browser + Tailscale] -->|HTTPS over Tailscale| TS
-    subgraph SERVER[Dedicated physical Ubuntu server]
+    subgraph SERVER[Server VM first - physical server after validation]
         TS[Tailscale Serve: HTTPS entry point] --> WEB[Nginx: React static files and /api proxy]
         WEB --> API[FastAPI: authentication, chat, retrieval]
         API --> DB[(PostgreSQL: accounts, sessions, chats, chunks, jobs)]
         API --> Q[(Qdrant: vectors and filtering metadata)]
         API --> FILES[(Private PDF storage)]
-        API --> O[Existing Ollama: chat and embedding models]
+        API --> O[Ollama: lab container first, existing container on physical target]
         WORKER[PDF indexing worker] --> DB
         WORKER --> Q
         WORKER --> FILES
@@ -41,7 +42,7 @@ See [the architecture plan](docs/architecture.md) for boundaries, flows, API out
 
 The supplied screenshot requires one server, at least two clients, at least three VMs, and at least five client-server scenarios. Physical computers are listed as a bonus in addition to the VM setup.
 
-The chosen physical server plus two client VMs meets the server/client count but does **not** meet the literal three-VM requirement. Instructor acceptance of this substitution is unresolved. Do not claim full rubric compliance until that is confirmed or a separate compliant VM topology is agreed.
+The agreed first stage uses the required topology: one server VM and two client VMs. Record at least five successful client-server scenarios in this environment before deploying to the physical server. Retain the VM setup and evidence for assessment. A later physical-client demonstration can supplement the VM demonstration for the bonus.
 
 ## First-version features
 

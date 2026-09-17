@@ -2,13 +2,15 @@
 
 ## 1. Deployment and networking
 
-The physical server is the sole application and data host. CasaOS remains its container management interface. Keep reproducible application deployment in a Docker Compose file under version control; do not replace the existing Ollama deployment.
+Deployment has two stages. First, validate a self-contained lab with one Ubuntu server VM and two separate client VMs. The server VM is the sole application, model, and data host for this stage. Run its own Ollama container alongside the application stack; do not route lab inference to the physical server. Use CPU inference unless GPU access inside the VM is explicitly verified, and benchmark a smaller quantized model if needed.
 
-Install or reuse Tailscale on the server host and on each client VM. Use Tailscale Serve for a trusted HTTPS entry point on the server's assigned tailnet hostname. Forward it to an Nginx container published only on server loopback, initially `127.0.0.1:8080`. Verify that port is free before deployment. Nginx serves the built React application and proxies `/api/` to FastAPI without stripping the API prefix. Disable proxy buffering for streamed chat responses.
+After lab acceptance, deploy the same application stack to the dedicated physical server. CasaOS remains that server's container management interface, and its existing Ollama container is reused. Keep deployment in a base Docker Compose file with a lab override adding Ollama and a physical-server override connecting to the existing model service. Configure model names, endpoint, hostname, secrets, and storage paths per environment without changing application code.
+
+Install or reuse Tailscale inside all three VMs for the lab, then on the physical server for the later deployment. Each VM needs its own machine identity and outbound network connectivity; do not duplicate enrolled Tailscale state when cloning clients. Use separate tailnet hostnames for lab and physical servers. Use Tailscale Serve for a trusted HTTPS entry point on the server's assigned tailnet hostname. Forward it to an Nginx container published only on server loopback, initially `127.0.0.1:8080`. Verify that port is free before deployment. Nginx serves the built React application and proxies `/api/` to FastAPI without stripping the API prefix. Disable proxy buffering for streamed chat responses.
 
 Client browsers use one HTTPS origin for the frontend and API. Tailnet access grants permit the student client identities to reach only the application HTTPS entry point. The server still authenticates individual application users; a Tailscale identity is not a student account.
 
-PostgreSQL, Qdrant, the worker, and FastAPI use internal Docker networking without published client ports. Connect the backend and worker to the existing Ollama container through a named Docker network and a stable internal alias. Inspect the existing CasaOS network and container configuration before choosing that alias. Use `OLLAMA_BASE_URL` for the internal endpoint; `localhost:11434` inside the backend container is not the Ollama container. Record any network attachment in the deployment runbook so it survives container recreation. Do not expose Ollama directly to students.
+PostgreSQL, Qdrant, the worker, and FastAPI use internal Docker networking without published client ports. In the lab, the backend and worker reach the Compose-managed Ollama service at `http://ollama:11434`. On the physical target, connect them to the existing Ollama container through a named Docker network and a stable internal alias. Inspect the existing CasaOS network and container configuration before choosing that alias. Use `OLLAMA_BASE_URL` for the internal endpoint; `localhost:11434` inside the backend container is not the Ollama container. Record any network attachment in the deployment runbook so it survives container recreation. Do not expose Ollama directly to students.
 
 Review the existing 11434 host binding before deployment and restrict unwanted access without disrupting other authorized server uses. Changes to the existing server are implementation work, not already completed actions.
 
@@ -21,11 +23,11 @@ Review the existing 11434 host binding before deployment and restrict unwanted a
 | API | FastAPI, SQLAlchemy, Alembic | Authentication, ownership, chat orchestration, retrieval |
 | Application store | PostgreSQL | Authoritative user data, chunk text, source metadata, jobs |
 | Vector index | Qdrant | Derived embeddings with owner/document/chunk filters |
-| Model service | Existing Ollama container | Local text generation and embeddings |
+| Model service | Lab Ollama container; existing Ollama on physical target | Local text generation and embeddings |
 | Document worker | Separate Python container from backend image | PDF extraction, chunking, embedding, indexing |
 | Files | Private persistent volume | Uploaded PDF bytes under server-generated names |
 
-Initial model candidate: `qwen3:8b` Q4_K_M, with thinking disabled and a 4,096-token context budget for the first benchmark. This is a candidate, not a measured performance claim. Compare answer quality, GPU residency, time to first token, total duration, and two-client queue behavior before locking the model. Use a smaller quantized model if the measured latency or memory use is unsuitable.
+Physical-server model candidate: `qwen3:8b` Q4_K_M, with thinking disabled and a 4,096-token context budget for the first benchmark. Select the lab's quantized model after verifying its host and VM resource allocation; do not assume the physical server's GPU is available to the VM. Both environments use the same Ollama integration with a configurable model name. These are benchmark candidates, not measured performance claims. Compare answer quality, available memory, CPU/GPU residency, time to first token, total duration, and two-client queue behavior before locking each environment's model. Repeat the known-answer tests when changing models.
 
 Use `nomic-embed-text` as the initial embedding candidate through Ollama. Pin resolved model versions/digests at implementation time. Apply the model's document/query input conventions consistently, derive the Qdrant vector dimension from a verified embedding, and reindex when the embedding model changes. Keep embedding batches small so uploads do not overwhelm chat inference.
 
@@ -70,22 +72,24 @@ Clients poll document status during indexing. Streaming is optional at the model
 
 ## 5. Implementation phases and acceptance
 
-1. **Server verification and network skeleton:** inspect OS, existing container/network names, GPU visibility, model inventory, free disk, Tailscale identity and access rules. Deploy a minimal HTTPS page/API and reach it from two separate client VMs. Verify tailnet authorization blocks an unauthorized client.
+1. **Three-VM lab and network skeleton:** verify the VM host's available resources, allocate one Ubuntu server VM and two browser-capable client VMs, and record their distinct identities. Inspect guest OS, Docker, disk, CPU/GPU access, model inventory, and Tailscale access rules. Run all server services, including Ollama, inside the server VM. Deploy a minimal HTTPS page/API and reach it from both client VMs. Verify tailnet authorization blocks an unauthorized client.
 2. **Accounts and persistence:** build sessions, authorization, conversations, and migrations. Verify two students cannot read or mutate each other's chats, PDFs, or attachments, including guessed IDs.
 3. **Normal chat:** integrate Ollama and the bounded queue, stream answers, retain history, and handle timeouts/retries. Measure one-client and two-client latency and routing correctness; do not set a performance claim before measurement.
 4. **Documents and RAG:** implement durable indexing, sources, attachments, and cleanup. Test known-answer PDFs, unrelated questions, image-only PDFs, corrupt/oversized input, reindex retries, document deletion, and cross-student retrieval attempts.
-5. **Networking demonstration:** run login, general chat, PDF upload, document-grounded chat, history retrieval, and simultaneous two-student requests. Show VM identities/IPs, HTTPS requests/status codes, server request IDs, file transfer, and response routing. Capture traffic on the Tailscale interface to show inner connections; HTTPS payloads remain encrypted. Compare with the physical interface's tunnel traffic and explain direct versus relayed connectivity if observed.
+5. **Three-VM networking demonstration:** with all three VMs running, demonstrate login, general chat, PDF upload, document-grounded chat, history retrieval, and simultaneous two-student requests. Show VM identities/IPs, HTTPS requests/status codes, server request IDs, file transfer, and response routing. Capture traffic on the Tailscale interface to show inner connections; HTTPS payloads remain encrypted. Compare with the guest network adapter's tunnel traffic and explain direct versus relayed connectivity if observed. Save evidence of at least five scenarios before proceeding to physical deployment.
 6. **Recovery and delivery:** restart application/worker containers and confirm persistent accounts, documents, and conversations; simulate unavailable Ollama/Qdrant and worker interruption. Provide setup instructions, pinned dependencies/images, `.env.example`, sanitized demo data, packet-capture instructions, and measured results. Back up PostgreSQL and private files; Qdrant is rebuildable from chunks and the pinned embedding model.
 
-No application code or server deployment is included in the initial planning commit.
+7. **Physical-server deployment:** only after lab acceptance, inspect the dedicated server and existing Ollama/CasaOS setup, deploy the same tested application revision with separate secrets and volumes, and change the configured model endpoint and HTTPS hostname. Start with fresh demo accounts and upload the same sanitized PDFs; transferring personal lab data is not required. Use the same embedding model or rebuild the index if it changes. Repeat the scenario, isolation, persistence, and failure checks, then benchmark GPU-backed inference. Retain the working lab as the assessment environment. Add physical browser clients for the bonus demonstration.
 
-## 6. Open course decision
+No application code or server deployment is included in the planning documentation.
 
-The requested dedicated physical server plus two client VMs does not satisfy the supplied screenshot's literal minimum of three VMs. Obtain instructor acceptance or agree a separate compliant assessment topology. Merely adding a third client VM does not establish that it meets an expected virtualized-server architecture. Keep this question visible in the report and do not describe an unapproved substitution as compliant.
+## 6. Assessment and deployment gate
+
+The agreed lab topology is one server VM and two client VMs, which matches the supplied server/client and VM-count requirements. The earlier proposed substitution of a physical server for the server VM is superseded. Full project acceptance still requires evidence of at least five working scenarios and the isolation/recovery checks above. The dedicated physical server is a subsequent deployment, not a replacement for the required VM demonstration.
 
 ## References
 
-- User-provided architecture PDF and course-requirements screenshot are design inputs; the user's later dedicated-server/Tailscale choices supersede earlier deployment suggestions.
+- User-provided architecture PDF and course-requirements screenshot are design inputs; the agreed sequence is three-VM validation first, then dedicated-server deployment, with Tailscale access in both stages.
 - [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve): HTTPS service access within a tailnet.
 - [Ollama Docker documentation](https://docs.ollama.com/docker): NVIDIA GPU access requires the appropriate container runtime configuration.
 - [Qwen3 8B model entry](https://ollama.com/library/qwen3:8b): initial quantized generation candidate.
