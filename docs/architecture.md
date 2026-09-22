@@ -85,7 +85,13 @@ Clients poll document status during indexing. Streaming is optional at the model
 
 7. **Physical-server deployment:** only after lab acceptance, inspect the dedicated server and existing Ollama/CasaOS setup, deploy the same tested application revision with separate secrets and volumes, and change the configured model endpoint and HTTPS hostname. Start with fresh demo accounts and upload the same sanitized PDFs; transferring personal lab data is not required. Use the same embedding model or rebuild the index if it changes. Repeat the scenario, isolation, persistence, and failure checks, then benchmark GPU-backed inference. Retain the working lab as the assessment environment. Add physical browser clients for the bonus demonstration.
 
-No application code or server deployment is included in the planning documentation.
+Implementation milestones 01 through 04 now provide the runnable web/API,
+private accounts, normal chat, PDF upload, durable indexing jobs, page-aware
+chunks, model-specific Qdrant collections, attachment-scoped retrieval, and
+source snapshots. Local acceptance tests use a synthetic PDF and mocked model
+and vector responses. Live model quality, latency, and two-client routing
+still require the server VM; networking evidence and physical deployment are
+later milestones.
 
 ## 6. Assessment and deployment gate
 

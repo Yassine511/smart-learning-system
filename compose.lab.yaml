@@ -1,0 +1,24 @@
+services:
+  ollama:
+    image: ollama/ollama:0.34.1
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  backend:
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  worker:
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+volumes:
+  ollama_data:
