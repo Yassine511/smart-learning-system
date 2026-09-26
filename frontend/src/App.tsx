@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import DocumentsPanel from "./DocumentsPanel";
 import SourceList, { type Source } from "./SourceList";
+import ErrorNotice, { chatFailure, friendlyError, requestError, type UiError } from "./ErrorNotice";
 
 
 
@@ -47,24 +48,7 @@ const labels: Record<string, string> = {
 
 };
 
-const chatErrors: Record<string, string> = {
 
-  model_missing: "The chat model is not installed on the server yet.",
-  embedding_model_missing: "The embedding model is not installed yet.",
-  vector_store_unavailable: "Document search is unavailable.",
-  invalid_citation: "The answer contained an unverified citation.",
-  source_unavailable: "A source changed while this answer was being written.",
-
-  ollama_unavailable: "Ollama is unavailable. Try again after it starts.",
-
-  generation_timeout: "The model took too long. You can retry this message.",
-
-  queue_timeout: "The request waited too long in the queue.",
-
-  client_disconnected: "The connection closed before the answer finished.",
-  interrupted: "The server stopped before the answer finished. You can retry.",
-
-};
 
 
 
@@ -80,21 +64,7 @@ function getCookie(name: string): string | null {
 
 
 
-async function apiError(response: Response): Promise<string> {
 
-  try {
-
-    const body = (await response.json()) as { detail?: string };
-
-    return body.detail ?? `Request failed (${response.status})`;
-
-  } catch {
-
-    return `Request failed (${response.status})`;
-
-  }
-
-}
 
 
 
@@ -191,7 +161,7 @@ function App() {
 
   const [busy, setBusy] = useState(false);
 
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UiError | null>(null);
 
 
 
@@ -217,7 +187,7 @@ function App() {
 
     const response = await fetch("/api/conversations");
 
-    if (!response.ok) throw new Error(await apiError(response));
+    if (!response.ok) throw await requestError(response);
 
     setConversations((await response.json()) as Conversation[]);
 
@@ -229,7 +199,7 @@ function App() {
 
     const response = await fetch(`/api/conversations/${id}/messages`);
 
-    if (!response.ok) throw new Error(await apiError(response));
+    if (!response.ok) throw await requestError(response);
 
     setMessages((await response.json()) as Message[]);
 
@@ -251,6 +221,10 @@ function App() {
 
         await loadConversations();
 
+      } else if (response.status !== 401) {
+
+        throw await requestError(response);
+
       }
 
       setLoading(false);
@@ -259,7 +233,7 @@ function App() {
 
     void bootstrap().catch((reason: unknown) => {
 
-      setError(reason instanceof Error ? reason.message : "Startup failed");
+      setError(friendlyError(reason));
 
       setLoading(false);
 
@@ -291,7 +265,7 @@ function App() {
 
       });
 
-      if (!response.ok) throw new Error(await apiError(response));
+      if (!response.ok) throw await requestError(response);
 
       const payload = (await response.json()) as LoginResponse;
 
@@ -301,7 +275,7 @@ function App() {
 
     } catch (reason) {
 
-      setError(reason instanceof Error ? reason.message : "Sign in failed");
+      setError(friendlyError(reason));
 
     } finally {
 
@@ -337,7 +311,7 @@ function App() {
 
       });
 
-      if (!response.ok) throw new Error(await apiError(response));
+      if (!response.ok) throw await requestError(response);
 
       const created = (await response.json()) as Conversation;
 
@@ -353,7 +327,7 @@ function App() {
 
     } catch (reason) {
 
-      setError(reason instanceof Error ? reason.message : "Could not create conversation");
+      setError(friendlyError(reason));
 
     } finally {
 
@@ -384,7 +358,7 @@ function App() {
 
     } catch (reason) {
 
-      setError(reason instanceof Error ? reason.message : "Could not load messages");
+      setError(friendlyError(reason));
 
     }
 
@@ -415,7 +389,7 @@ function App() {
 
       });
 
-      if (!response.ok) throw new Error(await apiError(response));
+      if (!response.ok) throw await requestError(response);
 
       await readChatStream(response, (name, payload) => {
 
@@ -431,7 +405,7 @@ function App() {
           }]);
         }
 
-        if (name === "failed") setError(chatErrors[payload.error_code ?? ""] ?? "The reply failed. You can retry it.");
+        if (name === "failed") setError(chatFailure(payload.error_code ?? null));
 
         if (name === "complete") setChatStatus("Completed");
 
@@ -443,7 +417,7 @@ function App() {
 
     } catch (reason) {
 
-      setError(reason instanceof Error ? reason.message : "Chat request failed");
+      setError(friendlyError(reason));
 
       try { await loadMessages(conversationId); } catch { /* Keep the visible error. */ }
 
@@ -510,7 +484,7 @@ function App() {
 
       });
 
-      if (!response.ok) throw new Error(await apiError(response));
+      if (!response.ok) throw await requestError(response);
 
       setUser(null);
 
@@ -522,7 +496,7 @@ function App() {
 
     } catch (reason) {
 
-      setError(reason instanceof Error ? reason.message : "Could not log out");
+      setError(friendlyError(reason));
 
     } finally {
 
@@ -534,7 +508,7 @@ function App() {
 
 
 
-  if (loading) return <main className="loading-screen">Preparing your private workspaceâ€¦</main>;
+  if (loading) return <main className="loading-screen">Preparing your private workspace…</main>;
 
 
 
@@ -556,7 +530,7 @@ function App() {
 
           <div className="hero">
 
-            <p className="eyebrow">Private learning Â· three-VM lab</p>
+            <p className="eyebrow">Private learning · three-VM lab</p>
 
             <h1>Learn from your own material.</h1>
 
@@ -572,9 +546,9 @@ function App() {
 
             <label>Password<input name="password" type="password" autoComplete="current-password" required /></label>
 
-            {error ? <p className="error">{error}</p> : null}
+            {error ? <ErrorNotice error={error} onDismiss={() => setError(null)} /> : null}
 
-            <button type="submit" disabled={busy}>{busy ? "Signing inâ€¦" : "Enter workspace"}</button>
+            <button type="submit" disabled={busy}>{busy ? "Signing in…" : "Enter workspace"}</button>
 
           </form>
 
@@ -642,7 +616,7 @@ function App() {
 
                       <article className={`message ${message.role}`} key={message.id}>
 
-                        <p className="message-role">{message.role === "user" ? "You" : "Assistant"} Â· {message.status}</p>
+                        <p className="message-role">{message.role === "user" ? "You" : "Assistant"} · {message.status}</p>
 
                         {message.content ? <p>{message.content}</p> : null}
                         <SourceList sources={message.sources ?? []} />
@@ -651,7 +625,7 @@ function App() {
 
                           <div>
 
-                            <p className="error">{chatErrors[message.error_code ?? ""] ?? "The reply failed."}</p>
+                            <ErrorNotice error={chatFailure(message.error_code)} />
 
                             <button type="button" onClick={() => retry(message)} disabled={chatBusy}>Retry</button>
 
@@ -667,10 +641,10 @@ function App() {
 
                       <article className="message assistant" aria-live="polite">
 
-                        <p className="message-role">Assistant Â· {chatStatus}</p>
+                        <p className="message-role">Assistant · {chatStatus}</p>
 
                         <SourceList sources={liveSources} />
-                        <p>{liveAnswer || "Waiting for the modelâ€¦"}</p>
+                        <p>{liveAnswer || "Waiting for the model…"}</p>
 
                       </article>
 
@@ -692,7 +666,7 @@ function App() {
 
               ) : null}
 
-              {error ? <p className="error" role="alert">{error}</p> : null}
+              {error ? <ErrorNotice error={error} onDismiss={() => setError(null)} /> : null}
 
             </div>
 
@@ -704,6 +678,11 @@ function App() {
               <p className="section-label">Server readiness</p>
 
               <h2>{readiness?.status === "ready" ? "All systems ready" : "Setup needs attention"}</h2>
+              {readiness?.status === "ready" ? null : (
+                <ErrorNotice error={readiness
+                  ? { title: "Server setup needs attention", message: "One or more services are unavailable.", nextStep: "Check the service details below, then select Check again.", status: 503 }
+                  : friendlyError(null)} />
+              )}
 
               <div className="service-list">
 
@@ -734,7 +713,7 @@ function App() {
 
       )}
 
-      <footer><span>Secure session Â· private resources</span><span>PDF chat Â· saved history</span></footer>
+      <footer><span>Secure session · private resources</span><span>PDF chat · saved history</span></footer>
 
     </main>
 

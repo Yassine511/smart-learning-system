@@ -1,0 +1,19 @@
+# Reuse the CasaOS-managed Ollama container on the physical server.
+# Set OLLAMA_DOCKER_NETWORK to that container's existing Docker network and
+# OLLAMA_BASE_URL to its Docker DNS name, for example
+# http://big-bear-ollama-nvidia:11434. Do not include compose.lab.yaml here.
+services:
+  backend:
+    networks:
+      - default
+      - existing_ollama
+
+  worker:
+    networks:
+      - default
+      - existing_ollama
+
+networks:
+  existing_ollama:
+    external: true
+    name: ${OLLAMA_DOCKER_NETWORK:?set OLLAMA_DOCKER_NETWORK in .env}

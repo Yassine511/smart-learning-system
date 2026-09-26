@@ -30,7 +30,7 @@ def stream_chat(messages: list[dict[str, str]]) -> Iterator[str]:
     }
     timeout = httpx.Timeout(
         connect=5.0,
-        read=min(60.0, settings.chat_generation_seconds),
+        read=settings.chat_generation_seconds,
         write=10.0,
         pool=5.0,
     )

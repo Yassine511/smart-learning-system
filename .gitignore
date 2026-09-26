@@ -17,6 +17,8 @@ models/
 *.dump
 *.pcap
 *.pcapng
+# The six-case capture uses only a disposable local test account.
+!evidence/http-six-cases.pcapng
 
 # Python
 build/

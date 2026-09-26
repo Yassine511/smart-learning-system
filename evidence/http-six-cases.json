@@ -1,0 +1,48 @@
+{
+  "origin": "http://127.0.0.1:50928",
+  "capture": "evidence\\http-six-cases.pcapng",
+  "cases": [
+    {
+      "case": "session required",
+      "method": "GET",
+      "path": "/api/me",
+      "expected": 401,
+      "observed": 401
+    },
+    {
+      "case": "CSRF blocked",
+      "method": "POST",
+      "path": "/api/conversations",
+      "expected": 403,
+      "observed": 403
+    },
+    {
+      "case": "missing private conversation",
+      "method": "GET",
+      "path": "/api/conversations/00000000-0000-0000-0000-000000000000",
+      "expected": 404,
+      "observed": 404
+    },
+    {
+      "case": "oversized PDF",
+      "method": "POST",
+      "path": "/api/documents",
+      "expected": 413,
+      "observed": 413
+    },
+    {
+      "case": "wrong PDF format",
+      "method": "POST",
+      "path": "/api/documents",
+      "expected": 415,
+      "observed": 415
+    },
+    {
+      "case": "dependency unavailable",
+      "method": "GET",
+      "path": "/api/ready",
+      "expected": 503,
+      "observed": 503
+    }
+  ]
+}

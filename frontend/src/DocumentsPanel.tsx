@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import ErrorNotice, { documentFailure, friendlyError, requestError, type UiError } from "./ErrorNotice";
 
 type Document = {
   id: string;
@@ -10,30 +11,9 @@ type Document = {
   size_bytes: number;
 };
 
-const errors: Record<string, string> = {
-  image_only_pdf: "No searchable text was found. Scanned PDFs need OCR.",
-  encrypted_pdf: "This PDF is encrypted.",
-  corrupt_pdf: "This PDF could not be read.",
-  too_many_pages: "This PDF has too many pages.",
-  too_much_text: "This PDF has too much text.",
-  embedding_model_missing: "Install the embedding model, then retry indexing.",
-  embedding_service_unavailable: "The embedding service is unavailable.",
-  vector_store_unavailable: "The vector database is unavailable.",
-  file_missing: "The stored PDF is missing.",
-};
-
 function csrfToken(): string {
   const cookie = document.cookie.split("; ").find((item) => item.startsWith("smart_learning_csrf="));
   return cookie ? decodeURIComponent(cookie.split("=", 2)[1]) : "";
-}
-
-async function detail(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { detail?: string };
-    return body.detail ?? "Request failed (" + response.status + ")";
-  } catch {
-    return "Request failed (" + response.status + ")";
-  }
 }
 
 export default function DocumentsPanel({
@@ -42,7 +22,7 @@ export default function DocumentsPanel({
   onDocumentDeleted,
 }: {
   conversationId: string | null;
-  onError: (message: string | null) => void;
+  onError: (message: UiError | null) => void;
   onDocumentDeleted: () => void;
 }) {
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -51,26 +31,26 @@ export default function DocumentsPanel({
 
   const loadDocuments = useCallback(async () => {
     const response = await fetch("/api/documents");
-    if (!response.ok) throw new Error(await detail(response));
+    if (!response.ok) throw await requestError(response);
     setDocuments((await response.json()) as Document[]);
   }, []);
 
   const loadAttached = useCallback(async (id: string) => {
     const response = await fetch("/api/conversations/" + id + "/documents");
-    if (!response.ok) throw new Error(await detail(response));
+    if (!response.ok) throw await requestError(response);
     setAttached(((await response.json()) as Document[]).map((item) => item.id));
   }, []);
 
   useEffect(() => {
     void loadDocuments().catch((reason: unknown) => {
-      onError(reason instanceof Error ? reason.message : "Could not load PDFs");
+      onError(friendlyError(reason));
     });
   }, [loadDocuments, onError]);
 
   useEffect(() => {
     if (!conversationId) { setAttached([]); return; }
     void loadAttached(conversationId).catch((reason: unknown) => {
-      onError(reason instanceof Error ? reason.message : "Could not load attachments");
+      onError(friendlyError(reason));
     });
   }, [conversationId, loadAttached, onError]);
 
@@ -90,11 +70,11 @@ export default function DocumentsPanel({
         headers: { "X-CSRF-Token": csrfToken() },
         body: new FormData(form),
       });
-      if (!response.ok) throw new Error(await detail(response));
+      if (!response.ok) throw await requestError(response);
       form.reset();
       await loadDocuments();
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Upload failed");
+      onError(friendlyError(reason));
     } finally { setBusy(false); }
   };
 
@@ -107,10 +87,10 @@ export default function DocumentsPanel({
         "/api/conversations/" + conversationId + "/documents/" + document.id,
         { method: isAttached ? "DELETE" : "PUT", headers: { "X-CSRF-Token": csrfToken() } },
       );
-      if (!response.ok) throw new Error(await detail(response));
+      if (!response.ok) throw await requestError(response);
       await loadAttached(conversationId);
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Could not update attachment");
+      onError(friendlyError(reason));
     } finally { setBusy(false); }
   };
 
@@ -124,10 +104,10 @@ export default function DocumentsPanel({
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken() },
         body: JSON.stringify({ display_name: name }),
       });
-      if (!response.ok) throw new Error(await detail(response));
+      if (!response.ok) throw await requestError(response);
       await loadDocuments();
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Could not rename PDF");
+      onError(friendlyError(reason));
     } finally { setBusy(false); }
   };
 
@@ -137,10 +117,10 @@ export default function DocumentsPanel({
       const response = await fetch("/api/documents/" + document.id + "/retry", {
         method: "POST", headers: { "X-CSRF-Token": csrfToken() },
       });
-      if (!response.ok) throw new Error(await detail(response));
+      if (!response.ok) throw await requestError(response);
       await loadDocuments();
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Could not restart indexing");
+      onError(friendlyError(reason));
     } finally { setBusy(false); }
   };
 
@@ -151,12 +131,12 @@ export default function DocumentsPanel({
       const response = await fetch("/api/documents/" + document.id, {
         method: "DELETE", headers: { "X-CSRF-Token": csrfToken() },
       });
-      if (!response.ok) throw new Error(await detail(response));
+      if (!response.ok) throw await requestError(response);
       await loadDocuments();
       if (conversationId) await loadAttached(conversationId);
       onDocumentDeleted();
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Could not delete PDF");
+      onError(friendlyError(reason));
     } finally { setBusy(false); }
   };
 
@@ -174,7 +154,7 @@ export default function DocumentsPanel({
           <article key={document.id}>
             <strong>{document.display_name}</strong>
             <small>{document.status}{document.page_count ? " / " + document.page_count + " pages" : ""}</small>
-            {document.error_code ? <p className="error">{errors[document.error_code] ?? document.error_code}</p> : null}
+            {document.error_code ? <ErrorNotice error={documentFailure(document.error_code, document.status === "deleting")} /> : null}
             <div className="document-actions">
               {document.status !== "deleting" ? (
                 <a href={"/api/documents/" + document.id + "/file"} target="_blank" rel="noreferrer">View PDF</a>
