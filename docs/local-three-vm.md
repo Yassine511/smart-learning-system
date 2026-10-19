@@ -228,6 +228,35 @@ From Windows, `scripts/local_vm_lab.ps1 -Action Status` displays state and memor
 blocked by VirtualBox hardening, use VirtualBox Manager directly.
 `-Action Stop` requests graceful guest shutdown and deletes no data.
 
+`-Action Start` also launches `scripts/keep_lab_awake.ps1` in a hidden process.
+It requests that Windows stay awake while any of VM1, VM_2, or VM3 is running,
+then releases the request when all three stop. A mutex prevents duplicate
+guards. It does not change the Windows power plan, Hyper-V, or security
+features. Its logs are in the ignored `backups/local-three-vm/power-guard*.log`
+files. When starting guests directly in VirtualBox Manager, run the guard in
+a Windows terminal and keep that terminal open:
+
+```powershell
+.\scripts\keep_lab_awake.ps1
+```
+
+Keep the laptop lid open during a lab session. Manual sleep and lid-close
+sleep still suspend the guests; the power request prevents automatic idle
+sleep only. On 19 October, the host's lid/Modern Standby events coincided with
+approximately nine-minute stall warnings in both client guests. Other
+VirtualBox timing warnings remain a separate limitation; a power request
+does not establish long-duration VM stability. See Microsoft's
+[SetThreadExecutionState documentation](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadexecutionstate).
+
+For the inspected server's later low-disk condition, copy
+`deploy/local-prototype/repair-resources.sh` into VM1 and run it with sudo.
+It verifies the server identity, local Qwen profile, expected Ubuntu ext4 root
+LV, and a single-LV volume group. If less than 3 GiB is free on `/` and at least
+3 GiB remains unallocated in `ubuntu-vg`, it grows the existing LV/filesystem
+by 3 GiB. It stops if these checks fail and makes no storage change when
+headroom is already sufficient. It also prints Docker usage and kernel timing
+diagnostics. The verified repair increased free space from 962 MiB to 3.8 GiB.
+
 Inside VM1, normal application shutdown preserves volumes and model weights:
 
 ```bash

@@ -80,3 +80,35 @@ VM1 had approximately 0.8 GiB free on its root filesystem at the final checks.
 Allow more disk headroom before adding models or substantial student data.
 The pre-prototype snapshots and original deployment hashes remain available;
 see [the runbook](local-three-vm.md) for startup, shutdown, and rollback.
+
+## Audit follow-up — 19 October 2026
+
+The later disk repair completed at 16:40 UTC (17:40 Africa/Lagos). It grew the
+existing root LV from approximately 19.5 to 22.5 GiB using 3 GiB already
+unallocated in `ubuntu-vg`; ext4 was resized online. Free space increased from
+962 MiB to 3.8 GiB, and application readiness still returned HTTP 200.
+Models, application volumes, and the existing snapshots were retained.
+
+Windows recorded lid-triggered Modern Standby at 15:28:35 UTC, followed by
+resume events at 15:38:37–15:39:08 UTC. Both client kernels recorded stalls
+of approximately 554–555 seconds around that resume. This explains that
+particular long pause; it does not establish the cause of every earlier
+VirtualBox timer warning. The installed VirtualBox 7.2.18 also reports using
+the Windows Hyper-V/NEM execution path.
+
+Lab startup now includes a temporary idle-sleep guard. Its bounded test
+successfully acquired and released the Windows power request, and a separate
+guard is active for the currently running guests. Manual/lid-close sleep
+remains effective. Keep the laptop open during lab operation. No new server
+kernel soft-lockup entries were found between 16:40:58 and 16:47:16 UTC;
+this short observation does not establish unattended stability.
+
+Both post-repair client runs reached real chat, successful PDF indexing,
+authorized download, and document attachment. Both then failed the full
+acceptance criterion because the weak model omitted valid document citations.
+The previously successful runs above remain historical results, not a claim
+that the new runs passed. The disk repair succeeded, while model citation
+reliability and long-duration virtualization stability remain limitations.
+
+The repair log and subsequent client reports are retained privately under
+`backups/local-three-vm/evidence/20261019-audit-fixes/`.

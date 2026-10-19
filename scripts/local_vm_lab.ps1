@@ -36,6 +36,15 @@ if ($Action -eq 'Start') {
     $taskAvailableMB = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024
     if ($taskAvailableMB -lt $taskRequiredMB) { throw "Close unused host applications first: need $taskRequiredMB MB free, have $([int]$taskAvailableMB) MB." }
     foreach ($taskVM in $taskStopped) { Invoke-TaskVBox @('startvm', $taskVM.Name, '--type', 'gui') }
+    $taskGuardScript = Join-Path $PSScriptRoot 'keep_lab_awake.ps1'
+    $taskGuardLog = Join-Path $taskRoot 'backups\local-three-vm\power-guard.log'
+    $taskGuardErrorLog = Join-Path $taskRoot 'backups\local-three-vm\power-guard.error.log'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $taskGuardLog) | Out-Null
+    $taskPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    Start-Process -FilePath $taskPowerShell -WindowStyle Hidden -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'RemoteSigned', '-File', ('"' + $taskGuardScript + '"')
+    ) -RedirectStandardOutput $taskGuardLog -RedirectStandardError $taskGuardErrorLog | Out-Null
+    Write-Output 'Started the lab-session idle-sleep guard. Keep the laptop lid open during tests.'
     exit
 }
 if ($Action -eq 'Stop') {
