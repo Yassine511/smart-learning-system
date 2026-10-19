@@ -1,8 +1,9 @@
 """Owned conversation history and streamed normal chat."""
 
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from datetime import timedelta, timezone
 import json
+from time import monotonic
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,12 +17,21 @@ from app.db import get_db, get_session_factory
 from app.models import Conversation, Message, utc_now
 from app.schemas import MessageCreate, MessageRead
 from app.security import AuthContext, get_current_auth, require_csrf
-from app.services.chat_queue import chat_queue
+from app.services.chat_queue import QueueFull, chat_queue
 from app.services.ollama_chat import ChatFailure, stream_chat
-from app.services.rag import (NO_EVIDENCE, attachment_scope, cited_sources, complete_with_sources, document_prompt, retrieve)
+from app.services.rag import (
+    NO_EVIDENCE, UNVERIFIED, SourceCandidate, attachment_scope, citation_retry_messages,
+    citation_schema, cited_sources, complete_with_sources, document_prompt,
+    parse_structured_answer, retrieve,
+)
 from app.services.vector_index import IndexProblem
 
 router = APIRouter(prefix="/api/conversations", tags=["messages"])
+
+# Document answers are validated before any text is sent. An SSE comment keeps
+# Nginx and other proxies from timing out the otherwise silent stream.
+KEEPALIVE = ": keepalive\n\n"
+KEEPALIVE_SECONDS = 15.0
 
 
 def get_chat_session_factory() -> sessionmaker[Session]:
@@ -97,6 +107,31 @@ def _prompt(
     ]
 
 
+def _structured_answer(
+    prompt: list[dict[str, str]],
+    candidates: list[SourceCandidate],
+) -> Generator[str, None, tuple[str, list[SourceCandidate]]]:
+    """Ask for JSON with source IDs, validate them, and retry a bounded number of times."""
+    schema = citation_schema(candidates)
+    attempt_prompt = prompt
+    for _ in range(get_settings().rag_citation_attempts):
+        raw = ""
+        last_beat = monotonic()
+        for delta in stream_chat(attempt_prompt, response_format=schema):
+            raw += delta
+            if monotonic() - last_beat >= KEEPALIVE_SECONDS:
+                last_beat = monotonic()
+                yield KEEPALIVE
+        parsed = parse_structured_answer(raw, candidates)
+        if parsed is not None and not parsed.supported:
+            return NO_EVIDENCE, []
+        if parsed is not None and parsed.answer and parsed.sources:
+            return parsed.answer, parsed.sources
+        attempt_prompt = [*prompt, *citation_retry_messages(raw)]
+        yield KEEPALIVE
+    return UNVERIFIED, []
+
+
 def _stream(
     factory: sessionmaker[Session],
     ticket: UUID,
@@ -107,6 +142,7 @@ def _stream(
     user_id: UUID,
     scope: list[dict],
 ) -> Iterator[str]:
+    chat_queue.attach(ticket)
     settings = get_settings()
     answer = ""
     finished = False
@@ -134,20 +170,31 @@ def _stream(
             prompt = [rag_messages[0], *rag_messages[1:-1], *history, rag_messages[-1]]
         else:
             prompt = _prompt(factory, conversation_id, request_id, question)
-        for delta in stream_chat(prompt):
-            answer += delta
-            if not candidates:
-                yield event("delta", {"request_id": str(request_id), "content": delta})
-        if not answer.strip():
-            raise ChatFailure("empty_model_response")
-        if candidates:
+        if candidates and settings.rag_structured_output:
+            answer, cited = yield from _structured_answer(prompt, candidates)
+            if cited:
+                complete_with_sources(factory, assistant_id, conversation_id, user_id, answer, cited)
+            else:
+                _update_message(factory, assistant_id, "completed", answer)
+        else:
+            last_beat = monotonic()
+            for delta in stream_chat(prompt):
+                answer += delta
+                if not candidates:
+                    yield event("delta", {"request_id": str(request_id), "content": delta})
+                elif monotonic() - last_beat >= KEEPALIVE_SECONDS:
+                    last_beat = monotonic()
+                    yield KEEPALIVE
+            if not answer.strip():
+                raise ChatFailure("empty_model_response")
+        if candidates and not settings.rag_structured_output:
             cited = cited_sources(answer, candidates)
             if cited:
                 complete_with_sources(factory, assistant_id, conversation_id, user_id, answer, cited)
             else:
                 answer = NO_EVIDENCE
                 _update_message(factory, assistant_id, "completed", answer)
-        else:
+        elif not candidates:
             cited = []
             _update_message(factory, assistant_id, "completed", answer)
         finished = True
@@ -177,8 +224,9 @@ def _stream(
 
 def _expire_stale(db: Session, conversation_id: UUID) -> None:
     settings = get_settings()
+    generation = settings.chat_generation_seconds * max(1, settings.rag_citation_attempts)
     cutoff = utc_now() - timedelta(
-        seconds=settings.chat_queue_wait_seconds + settings.chat_generation_seconds + 10
+        seconds=settings.chat_queue_wait_seconds + generation + 10
     )
     pending = db.scalars(
         select(Message).where(
@@ -297,9 +345,20 @@ def send_message(
         db, conversation_id, auth.user.id
     )
     scope = scope or []
-    ticket = chat_queue.admit(get_settings().chat_queue_capacity)
-    if ticket is None:
-        raise HTTPException(status_code=429, detail="Chat queue is full", headers={"Retry-After": "5"})
+    settings = get_settings()
+    try:
+        # A per-student share keeps one student's tabs from filling the queue.
+        ticket = chat_queue.admit(
+            settings.chat_queue_capacity,
+            owner=str(auth.user.id),
+            owner_capacity=settings.chat_queue_user_capacity,
+        )
+    except QueueFull as exc:
+        detail = (
+            "You already have the maximum number of pending replies"
+            if exc.scope == "owner" else "Chat queue is full"
+        )
+        raise HTTPException(status_code=429, detail=detail, headers={"Retry-After": "5"}) from exc
     try:
         if previous_user is None:
             db.add(Message(

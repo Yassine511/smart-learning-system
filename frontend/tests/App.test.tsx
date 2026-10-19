@@ -67,7 +67,7 @@ test("a stale conversation error is ignored", async () => {
   expect(screen.queryByText("Item unavailable")).toBeNull();
 });
 
-test.each([429, 401, 503])("HTTP %s preserves a rejected question and its request ID", async (status) => {
+test.each([429, 503])("HTTP %s preserves a rejected question and its request ID", async (status) => {
   const requests: string[] = [];
   messages = async (_url, options) => {
     if (options?.method !== "POST") return json([]);
@@ -164,4 +164,79 @@ test("drafts remain associated with their own conversations", async () => {
   enter("B draft");
   fireEvent.click(screen.getByRole("button", { name: /Conversation A/ }));
   expect((screen.getByLabelText("Your question") as HTMLTextAreaElement).value).toBe("A draft");
+});
+
+function signIn() {
+  fireEvent.change(screen.getByLabelText("Email"), { target: { value: "student@example.test" } });
+  fireEvent.change(screen.getByLabelText("Password"), { target: { value: "test-password" } });
+  fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
+}
+
+test("an expired session returns to sign-in and keeps the draft for the same student", async () => {
+  const ordinaryFetch = fetch;
+  vi.stubGlobal("fetch", async (url: string, options?: RequestInit) => {
+    if (url === "/api/login") return json({ user: { id: "student", email: "student@example.test", display_name: "Student" }, csrf_token: "csrf" });
+    return ordinaryFetch(url, options);
+  });
+  const requests: string[] = [];
+  messages = async (_url, options) => {
+    if (options?.method !== "POST") return json([]);
+    requests.push(JSON.parse(options.body as string).request_id);
+    return requests.length === 1 ? json({ detail: "Authentication required" }, 401) : terminal();
+  };
+  await open(); enter("Keep this question"); submit();
+  await screen.findByLabelText("Email");
+  expect(screen.getByText("Sign in required")).toBeTruthy();
+  expect(screen.queryByLabelText("Your question")).toBeNull();
+  signIn();
+  fireEvent.click(await screen.findByRole("button", { name: /Conversation A/ }));
+  await screen.findByRole("heading", { name: "Conversation A" });
+  expect((screen.getByLabelText("Your question") as HTMLTextAreaElement).value).toBe("Keep this question");
+  submit();
+  await waitFor(() => expect(requests).toHaveLength(2));
+  expect(requests[1]).toBe(requests[0]);
+});
+
+test("a different student signing in after expiry does not inherit drafts", async () => {
+  const ordinaryFetch = fetch;
+  vi.stubGlobal("fetch", async (url: string, options?: RequestInit) => {
+    if (url === "/api/login") return json({ user: { id: "other", email: "other@example.test", display_name: "Other" }, csrf_token: "csrf" });
+    return ordinaryFetch(url, options);
+  });
+  messages = async (_url, options) => options?.method === "POST" ? json({ detail: "Authentication required" }, 401) : json([]);
+  await open(); enter("Private draft"); submit();
+  await screen.findByLabelText("Email");
+  signIn();
+  fireEvent.click(await screen.findByRole("button", { name: /Conversation A/ }));
+  await screen.findByRole("heading", { name: "Conversation A" });
+  expect((screen.getByLabelText("Your question") as HTMLTextAreaElement).value).toBe("");
+});
+
+test("logging out of an already expired session still signs the student out", async () => {
+  const ordinaryFetch = fetch;
+  vi.stubGlobal("fetch", async (url: string, options?: RequestInit) => {
+    if (url === "/api/logout") return json({ detail: "Authentication required" }, 401);
+    return ordinaryFetch(url, options);
+  });
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+  await screen.findByLabelText("Email");
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("a 401 from background document polling returns to sign-in", async () => {
+  const ordinaryFetch = fetch;
+  let expired = false;
+  vi.stubGlobal("fetch", async (url: string, options?: RequestInit) => {
+    if (url === "/api/documents") {
+      return expired ? json({ detail: "Authentication required" }, 401)
+        : json([{ id: "doc", original_filename: "a.pdf", display_name: "a.pdf", status: "indexing", error_code: null, page_count: null, size_bytes: 1 }]);
+    }
+    return ordinaryFetch(url, options);
+  });
+  await open();
+  await screen.findByText("a.pdf");
+  expired = true;
+  await screen.findByLabelText("Email", undefined, { timeout: 5000 });
+  expect(screen.getByText("Sign in required")).toBeTruthy();
 });

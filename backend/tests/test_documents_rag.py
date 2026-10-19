@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 from io import BytesIO
+import json
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -77,12 +78,16 @@ def test_obsolete_index_failure_does_not_change_new_generation(
         assert db.get(DocumentJob, job_id).status == "completed"
 
 
-def test_citation_format_example_is_opt_in_and_keeps_actual_passages(monkeypatch):
+@pytest.mark.parametrize("structured", [False, True])
+def test_citation_format_example_is_opt_in_and_keeps_actual_passages(monkeypatch, structured):
     source = rag.SourceCandidate(uuid4(), uuid4(), 1, "S1", "owned.pdf", 3, "The real owned passage.")
     for enabled in (False, True):
-        monkeypatch.setattr(rag, "get_settings", lambda: Settings(_env_file=None, rag_citation_example=enabled))
+        monkeypatch.setattr(rag, "get_settings", lambda: Settings(
+            _env_file=None, rag_citation_example=enabled, rag_structured_output=structured,
+        ))
         prompt = rag.document_prompt("The actual question?", [source])
         assert prompt[0]["role"] == "system"
+        assert ("JSON" in prompt[0]["content"]) == structured
         assert prompt[-1]["role"] == "user"
         assert "owned.pdf, page 3" in prompt[-1]["content"]
         assert "The real owned passage." in prompt[-1]["content"]
@@ -90,7 +95,42 @@ def test_citation_format_example_is_opt_in_and_keeps_actual_passages(monkeypatch
         assert [message["role"] for message in prompt] == (["system", "user", "assistant", "user"] if enabled else ["system", "user"])
         if enabled:
             assert "not evidence for the real question" in prompt[1]["content"]
-            assert prompt[2]["content"].endswith("[S1]")
+            if structured:
+                assert json.loads(prompt[2]["content"])["sources"] == ["S1"]
+            else:
+                assert prompt[2]["content"].endswith("[S1]")
+
+
+def test_structured_answer_validation_rejects_unknown_or_malformed_sources():
+    first = rag.SourceCandidate(uuid4(), uuid4(), 1, "S1", "a.pdf", 1, "One")
+    second = rag.SourceCandidate(uuid4(), uuid4(), 1, "S2", "a.pdf", 2, "Two")
+    sources = [first, second]
+    schema = rag.citation_schema(sources)
+    assert schema["properties"]["sources"]["items"]["enum"] == ["S1", "S2"]
+    parsed = rag.parse_structured_answer(
+        json.dumps({"answer": " Yes. ", "supported": True, "sources": ["S2", "[S1]", "S2"]}), sources
+    )
+    assert parsed == rag.StructuredAnswer("Yes.", True, [first, second])
+    for raw in (
+        "not json",
+        "[]",
+        json.dumps({"answer": "Yes", "supported": True, "sources": ["S9"]}),
+        json.dumps({"answer": "Yes", "supported": "yes", "sources": ["S1"]}),
+        json.dumps({"answer": "Yes", "supported": True}),
+    ):
+        assert rag.parse_structured_answer(raw, sources) is None
+
+
+def test_free_text_citations_accept_grouped_markers():
+    first = rag.SourceCandidate(uuid4(), uuid4(), 1, "S1", "a.pdf", 1, "One")
+    second = rag.SourceCandidate(uuid4(), uuid4(), 1, "S2", "a.pdf", 2, "Two")
+    assert rag.cited_sources("Both apply [S1, S2].", [first, second]) == [first, second]
+    with pytest.raises(IndexProblem, match="invalid_citation"):
+        rag.cited_sources("Invented [S1, S7].", [first, second])
+
+
+def structured(answer: str, sources: list[str], supported: bool = True) -> str:
+    return json.dumps({"answer": answer, "supported": supported, "sources": sources})
 
 
 def fake_index(monkeypatch):
@@ -157,9 +197,10 @@ def test_upload_index_cited_chat_and_delete(
     try:
         points = fake_index(monkeypatch)
         prompts = []
-        def answer(prompt):
+        def answer(prompt, response_format=None):
             prompts.append(prompt)
-            return iter(["TCP uses acknowledgements [S1]."])
+            assert response_format["properties"]["sources"]["items"]["enum"]
+            return iter([structured("TCP uses acknowledgements [S1].", ["S1"])])
         monkeypatch.setattr(messages_api, "stream_chat", answer)
         token = login(client, "alice@example.test")
         posted = upload(client, token)
@@ -191,7 +232,9 @@ def test_upload_index_cited_chat_and_delete(
         assert reply.status_code == 200
         assert "event: source" in reply.text
         assert "event: complete" in reply.text
-        assert any(item["content"] == "The sample is blue. [S1]" for item in prompts[0]) == citation_example
+        assert any(
+            item["role"] == "assistant" and "The sample is blue." in item["content"] for item in prompts[0]
+        ) == citation_example
         assert "PDF passages:" in prompts[0][-1]["content"]
         replay = client.post(
             chat_url,
@@ -382,7 +425,13 @@ def test_unrelated_question_and_invented_citation_do_not_return_sources(
         assert client.get(chat_url).json()[-1]["sources"] == []
 
         monkeypatch.setattr(rag, "query_points", lambda *_args: list(points.values()))
-        monkeypatch.setattr(messages_api, "stream_chat", lambda _prompt: iter(["The passages do not answer this question."]))
+        calls = []
+
+        def unsupported_reply(prompt, response_format=None):
+            calls.append(prompt)
+            return iter([structured("The passages do not answer this question.", [], supported=False)])
+
+        monkeypatch.setattr(messages_api, "stream_chat", unsupported_reply)
         unsupported = client.post(
             chat_url, headers=csrf_headers(token),
             json={"request_id": str(uuid4()), "content": "What is the price of gold today?"},
@@ -390,17 +439,129 @@ def test_unrelated_question_and_invented_citation_do_not_return_sources(
         assert "event: complete" in unsupported.text
         assert rag.NO_EVIDENCE in unsupported.text
         assert client.get(chat_url).json()[-1]["sources"] == []
+        assert len(calls) == 1, "an explicit no-evidence reply needs no retry"
 
-        monkeypatch.setattr(messages_api, "stream_chat", lambda _prompt: iter(["Unsupported claim [S99]."]))
+        monkeypatch.setattr(
+            messages_api, "stream_chat",
+            lambda _prompt, response_format=None: iter([structured("Unsupported claim.", ["S99"])]),
+        )
         invented = client.post(
             chat_url, headers=csrf_headers(token),
             json={"request_id": str(uuid4()), "content": "What does the PDF say about TCP?"},
         )
-        assert "event: failed" in invented.text
-        assert "invalid_citation" in invented.text
+        assert "event: complete" in invented.text
+        assert rag.UNVERIFIED in invented.text
+        assert "Unsupported claim" not in invented.text
+        assert client.get(chat_url).json()[-1]["sources"] == []
+
+        # The free-text fallback mode keeps its strict marker validation.
+        monkeypatch.setattr(settings, "rag_structured_output", False)
+        monkeypatch.setattr(messages_api, "stream_chat", lambda _prompt: iter(["Unsupported claim [S99]."]))
+        legacy = client.post(
+            chat_url, headers=csrf_headers(token),
+            json={"request_id": str(uuid4()), "content": "What does the PDF say about TCP?"},
+        )
+        assert "event: failed" in legacy.text
+        assert "invalid_citation" in legacy.text
         assert client.get(chat_url).json()[-1]["sources"] == []
     finally:
         settings.upload_root = old_root
+
+
+def indexed_conversation(client, session_factory, monkeypatch, tmp_path) -> tuple[str, str]:
+    monkeypatch.setattr(get_settings(), "upload_root", str(tmp_path))
+    fake_index(monkeypatch)
+    token = login(client, "alice@example.test")
+    document_id = upload(client, token).json()["id"]
+    assert worker.run_once(session_factory)
+    conversation_id = conversation(client, token)
+    assert client.put(
+        f"/api/conversations/{conversation_id}/documents/{document_id}",
+        headers=csrf_headers(token),
+    ).status_code == 204
+    return token, f"/api/conversations/{conversation_id}/messages"
+
+
+def test_missing_citation_is_retried_once_with_a_correction(
+    client: TestClient, users, session_factory: sessionmaker[Session], tmp_path, monkeypatch
+) -> None:
+    token, chat_url = indexed_conversation(client, session_factory, monkeypatch, tmp_path)
+    calls = []
+    replies = iter([
+        structured("TCP retransmits lost segments.", []),
+        structured("TCP retransmits lost segments.", ["S1"]),
+    ])
+
+    def reply(prompt, response_format=None):
+        calls.append(prompt)
+        return iter([next(replies)])
+
+    monkeypatch.setattr(messages_api, "stream_chat", reply)
+    response = client.post(
+        chat_url, headers=csrf_headers(token),
+        json={"request_id": str(uuid4()), "content": "How does TCP deliver data reliably?"},
+    )
+    assert "event: source" in response.text
+    assert "event: complete" in response.text
+    assert len(calls) == 2
+    assert calls[1][:len(calls[0])] == calls[0]
+    assert calls[1][-1]["role"] == "user" and "did not list the passages" in calls[1][-1]["content"]
+    saved = client.get(chat_url).json()[-1]
+    assert saved["status"] == "completed"
+    assert saved["content"] == "TCP retransmits lost segments."
+    assert [source["marker"] for source in saved["sources"]] == ["S1"]
+    assert saved["sources"][0]["filename"] == "networking_notes.pdf"
+
+
+def test_repeatedly_uncited_answer_returns_explicit_unverified_fallback(
+    client: TestClient, users, session_factory: sessionmaker[Session], tmp_path, monkeypatch
+) -> None:
+    token, chat_url = indexed_conversation(client, session_factory, monkeypatch, tmp_path)
+    calls = []
+
+    def reply(prompt, response_format=None):
+        calls.append(prompt)
+        return iter(['{"answer": "TCP is reliable", "supp'])  # truncated JSON, then uncited
+
+    monkeypatch.setattr(messages_api, "stream_chat", reply)
+    response = client.post(
+        chat_url, headers=csrf_headers(token),
+        json={"request_id": str(uuid4()), "content": "How does TCP deliver data reliably?"},
+    )
+    assert "event: complete" in response.text
+    assert rag.UNVERIFIED in response.text
+    assert len(calls) == get_settings().rag_citation_attempts
+    saved = client.get(chat_url).json()[-1]
+    assert saved["status"] == "completed"
+    assert saved["content"] == rag.UNVERIFIED
+    assert saved["sources"] == []
+
+
+def test_worker_abandons_job_that_repeatedly_died_mid_processing(
+    client: TestClient, users, session_factory: sessionmaker[Session], tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "upload_root", str(tmp_path))
+    fake_index(monkeypatch)
+    token = login(client, "alice@example.test")
+    poisoned = UUID(upload(client, token).json()["id"])
+    healthy = UUID(upload(client, token).json()["id"])
+    with session_factory() as db:
+        job = db.query(DocumentJob).filter_by(document_id=poisoned).one()
+        job.status = "running"
+        job.attempts = get_settings().worker_max_attempts
+        job.lease_until = utc_now() - timedelta(minutes=1)
+        job.next_attempt_at = utc_now() - timedelta(hours=1)
+        db.commit()
+    # The abandoned job is settled and the same claim continues to the next job.
+    assert worker.run_once(session_factory)
+    with session_factory() as db:
+        job = db.query(DocumentJob).filter_by(document_id=poisoned).one()
+        assert job.status == "failed"
+        assert job.error_code == "processing_interrupted"
+        assert db.get(Document, poisoned).status == "failed"
+        assert db.get(Document, poisoned).error_code == "processing_interrupted"
+        assert db.get(Document, healthy).status == "indexed"
+    assert not worker.run_once(session_factory)
 
 
 def test_stale_other_student_vector_is_discarded_after_database_check(

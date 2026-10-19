@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.models import User
+from app.models import LoginSession, User
 from app.schemas import LoginRequest, LoginResponse, UserRead
 from app.services.login_throttle import LoginThrottled, login_throttle
 from app.security import (
@@ -15,6 +15,7 @@ from app.security import (
     normalize_email,
     require_allowed_origin,
     require_csrf,
+    utc_now,
     verify_password,
 )
 
@@ -93,6 +94,9 @@ def login(
         )
 
     login_session, session_token, csrf_token = create_login_session(user)
+    # Sessions are only created here, so pruning expired rows on sign-in keeps
+    # the table bounded without a separate cleanup job.
+    db.execute(delete(LoginSession).where(LoginSession.expires_at <= utc_now()))
     db.add(login_session)
     db.commit()
     _set_auth_cookies(response, session_token, csrf_token)

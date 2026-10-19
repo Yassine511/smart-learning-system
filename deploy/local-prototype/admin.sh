@@ -10,6 +10,12 @@ case "${SSH_ORIGINAL_COMMAND:-}" in
     df -h /opt
     if [[ "$role" == server ]]; then bash "$stack" ps; systemctl is-active smart-learning-local-caddy; fi
     ;;
+  verify-source)
+    [[ "$role" == server ]] || exit 2
+    cd /opt/smart-learning-local
+    cat deploy-revision.txt
+    sha256sum --quiet --strict -c deploy-manifest.sha256 && echo 'Deployed source matches its manifest.'
+    ;;
   trust-client)
     [[ "$role" != server ]] || exit 2
     bash /usr/local/lib/smart-learning-local/trust-client.sh "/home/$guest_user/smart-learning-local-root.crt" "$guest_user"
@@ -39,5 +45,5 @@ case "${SSH_ORIGINAL_COMMAND:-}" in
         ;;
     esac
     ;;
-  *) echo 'This key permits only local-lab status, trust, restart, model recovery, and packet capture.' >&2; exit 2 ;;
+  *) echo 'This key permits only local-lab status, source verification, trust, restart, model recovery, and packet capture.' >&2; exit 2 ;;
 esac

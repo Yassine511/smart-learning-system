@@ -111,6 +111,50 @@ the actual answer still receives the student's authorized PDF passages, and
 citations retain the same database ownership and generation checks. The default
 is false, preserving the normal prompt unless this option is selected.
 
+## Updating VM1 to a reviewed revision
+
+The setup media records which Git revision it was built from.
+`scripts/build_local_vm_media.py` adds `deploy-manifest.sha256` (a SHA-256 for
+every packaged file) and `deploy-revision.txt` (commit, whether there were
+uncommitted changes, build time) to `source.tar.gz`. Commit first so the
+recorded revision is meaningful. Then rebuild the media on the host, attach the
+new `setup.viso` to VM1's DVD drive, and run in VM1:
+
+```bash
+sudo mount -o ro /dev/sr0 /mnt/smart-learning
+```
+
+Run the update helper from the new media rather than the old deployed copy:
+
+```bash
+tmp=$(mktemp -d) && tar -xzf /mnt/smart-learning/source.tar.gz -C "$tmp" deploy/local-prototype/update-source.sh
+sudo bash "$tmp/deploy/local-prototype/update-source.sh" /mnt/smart-learning
+```
+
+`update-source.sh` verifies the media against its manifest before changing
+anything, then saves the previous source to
+`/var/lib/smart-learning-local-setup/source-before-update-*.tar.gz`. It
+replaces the compose files and the `backend`, `frontend`, `deploy`, `scripts`,
+and `docs` folders, so files deleted in Git do not linger. It then verifies the
+deployed files, rebuilds, and checks readiness. `.env`, the demo credentials,
+the CA file, Docker volumes, and models are kept. To check the deployed revision
+at any time:
+
+```bash
+cd /opt/smart-learning-local && cat deploy-revision.txt && sha256sum --quiet --strict -c deploy-manifest.sha256
+```
+
+After `finish-setup.sh` has reinstalled `admin.sh`, the restricted host key can
+run the same check with the `verify-source` command.
+
+`tune-cpu.sh` now changes only `.env` (`OLLAMA_NUM_THREADS=1`,
+`RAG_CITATION_EXAMPLE=true`) and recreates the backend and worker. It refuses to
+run unless the deployed source matches its manifest. It no longer copies Python
+files into `/opt`; earlier versions overwrote `config.py`, `ollama_chat.py`,
+`vector_index.py`, `rag.py`, and `messages.py` outside Git. A VM1 updated before
+this change has no manifest. Run `update-source.sh` once to replace any such
+patched files with the reviewed revision.
+
 Two synthetic administrator-created accounts are provisioned:
 `student1@example.test` and `student2@example.test`. Their random passwords are
 stored only in `/opt/smart-learning-local/.demo-credentials.json`, readable by

@@ -8,10 +8,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.api import messages as messages_api
 from app.models import Message, utc_now
-from app.services.chat_queue import ChatQueue
+from app.services.chat_queue import ChatQueue, QueueFull
 from app.services.ollama_chat import ChatFailure
 from app.services import ollama_chat
-from app.config import Settings
+from app.config import Settings, get_settings
 from tests.conftest import TEST_ORIGIN, csrf_headers, login
 
 
@@ -115,12 +115,102 @@ def test_chat_queue_is_fifo_and_bounded() -> None:
     queue = ChatQueue()
     first = queue.admit(2)
     second = queue.admit(2)
-    assert first is not None and second is not None
-    assert queue.admit(2) is None
+    with pytest.raises(QueueFull) as full:
+        queue.admit(2)
+    assert full.value.scope == "global"
     assert queue.wait_turn(first, 0.01)
     assert not queue.wait_turn(second, 0.01)
     queue.release(first)
     assert queue.admit(2) is not None
+
+
+def test_chat_queue_limits_each_student_share() -> None:
+    queue = ChatQueue()
+    queue.admit(4, owner="alice", owner_capacity=2)
+    queue.admit(4, owner="alice", owner_capacity=2)
+    with pytest.raises(QueueFull) as full:
+        queue.admit(4, owner="alice", owner_capacity=2)
+    assert full.value.scope == "owner"
+    assert queue.admit(4, owner="bob", owner_capacity=2) is not None
+
+
+def test_abandoned_unstarted_stream_does_not_block_the_queue(monkeypatch) -> None:
+    queue = ChatQueue(attach_seconds=0.05)
+    monkeypatch.setattr(messages_api, "chat_queue", queue)
+    abandoned = queue.admit(4)
+    # The client disconnected before the response body was iterated, so the
+    # generator never starts and its cleanup never runs.
+    stream = messages_api._stream(None, abandoned, uuid4(), uuid4(), uuid4(), "q", uuid4(), [])
+    del stream
+    later = queue.admit(4)
+    queue.attach(later)
+    assert queue.wait_turn(later, 2)
+    queue.release(later)
+    assert queue.admit(1) is not None
+
+
+def test_started_stream_is_not_expired_while_waiting() -> None:
+    queue = ChatQueue(attach_seconds=0.01)
+    first = queue.admit(4)
+    second = queue.admit(4)
+    queue.attach(second)
+    assert queue.wait_turn(first, 1)
+    assert not queue.wait_turn(second, 0.1)
+    queue.release(first)
+
+
+def test_one_student_cannot_take_every_queue_slot(
+    client: TestClient, users, monkeypatch
+) -> None:
+    queue = ChatQueue()
+    monkeypatch.setattr(messages_api, "chat_queue", queue)
+    monkeypatch.setattr(messages_api, "stream_chat", lambda _prompt: iter(["Answer"]))
+    for _ in range(2):
+        queue.attach(queue.admit(4, owner=str(users["alice"].id), owner_capacity=2))
+    token = login(client, "alice@example.test")
+    conversation_id = create_conversation(client, token)
+    busy = client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        headers=csrf_headers(token),
+        json={"request_id": str(uuid4()), "content": "Another question"},
+    )
+    assert busy.status_code == 429
+    assert busy.json()["detail"] == "You already have the maximum number of pending replies"
+
+    # Alice's held tickets stay ahead of Bob, so shorten his wait; the point is
+    # that he is admitted (HTTP 200 stream) rather than refused with 429.
+    monkeypatch.setattr(get_settings(), "chat_queue_wait_seconds", 0.2)
+    from app.main import app
+    with TestClient(app, base_url=TEST_ORIGIN) as bob_client:
+        bob_token = login(bob_client, "bob@example.test")
+        bob_conversation = create_conversation(bob_client, bob_token)
+        admitted = bob_client.post(
+            f"/api/conversations/{bob_conversation}/messages",
+            headers=csrf_headers(bob_token),
+            json={"request_id": str(uuid4()), "content": "My question"},
+        )
+        assert admitted.status_code == 200
+        assert '"status": "queued"' in admitted.text
+
+
+def test_ollama_adapter_sends_structured_output_schema(monkeypatch) -> None:
+    monkeypatch.setattr(ollama_chat, "get_settings", lambda: Settings(_env_file=None))
+    real_client = httpx.Client
+    requests = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text='{"message":{"content":"{}"},"done":true}\n')
+
+    monkeypatch.setattr(
+        ollama_chat.httpx, "Client",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(reply), **kwargs),
+    )
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    assert list(ollama_chat.stream_chat([{"role": "user", "content": "Hi"}], response_format=schema)) == ["{}"]
+    assert b'"format":{"type":"object"' in requests[0].content
+    list(ollama_chat.stream_chat([{"role": "user", "content": "Hi"}]))
+    assert b'"format"' not in requests[1].content
 
 
 @pytest.mark.parametrize("prototype", [False, True])

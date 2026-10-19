@@ -56,9 +56,15 @@ export default function DocumentsPanel({
 
   useEffect(() => {
     if (!documents.some((item) => ["pending", "indexing", "deleting"].includes(item.status))) return;
-    const timer = window.setInterval(() => { void loadDocuments().catch(() => undefined); }, 3000);
+    const timer = window.setInterval(() => {
+      void loadDocuments().catch((reason: unknown) => {
+        // Background polling stays quiet except when the session has ended.
+        const failure = friendlyError(reason);
+        if (failure.status === 401) onError(failure);
+      });
+    }, 3000);
     return () => window.clearInterval(timer);
-  }, [documents, loadDocuments]);
+  }, [documents, loadDocuments, onError]);
 
   const upload = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

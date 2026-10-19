@@ -153,6 +153,8 @@ function App() {
   const selectedId = useRef<string | null>(null);
   const messageLoadVersion = useRef(0);
   const pendingSubmissions = useRef(new Map<string, { requestId: string; content: string }>());
+  // Drafts survive an expired session only for the student who wrote them.
+  const draftOwner = useRef<string | null>(null);
   const setDraft = (value: string) => {
     if (selected) setDrafts((current) => ({ ...current, [selected.id]: value }));
   };
@@ -169,6 +171,38 @@ function App() {
   const [busy, setBusy] = useState(false);
 
   const [error, setError] = useState<UiError | null>(null);
+
+  const resetSession = useCallback((keepDrafts: boolean) => {
+    setUser(null);
+    selectedId.current = null;
+    messageLoadVersion.current += 1;
+    if (!keepDrafts) {
+      pendingSubmissions.current.clear();
+      setDrafts({});
+      draftOwner.current = null;
+    }
+    setConversations([]);
+    setSelected(null);
+    setMessages([]);
+    setLiveAnswer("");
+    setLiveSources([]);
+  }, []);
+
+  // A 401 after sign-in means the server session ended (expired or signed out
+  // elsewhere). Return to the sign-in form instead of leaving a dead workspace.
+  const reportError = useCallback((next: UiError | null) => {
+    if (next?.status === 401) resetSession(true);
+    setError(next);
+  }, [resetSession]);
+
+  const signedIn = useCallback((next: User) => {
+    if (draftOwner.current !== next.id) {
+      pendingSubmissions.current.clear();
+      setDrafts({});
+    }
+    draftOwner.current = next.id;
+    setUser(next);
+  }, []);
 
 
 
@@ -227,7 +261,7 @@ function App() {
 
       if (response.ok) {
 
-        setUser((await response.json()) as User);
+        signedIn((await response.json()) as User);
 
         await loadConversations();
 
@@ -249,7 +283,7 @@ function App() {
 
     });
 
-  }, [loadConversations, refreshReadiness]);
+  }, [loadConversations, refreshReadiness, signedIn]);
 
 
 
@@ -279,7 +313,7 @@ function App() {
 
       const payload = (await response.json()) as LoginResponse;
 
-      setUser(payload.user);
+      signedIn(payload.user);
 
       await loadConversations();
 
@@ -337,7 +371,7 @@ function App() {
 
     } catch (reason) {
 
-      setError(friendlyError(reason));
+      reportError(friendlyError(reason));
 
     } finally {
 
@@ -370,7 +404,7 @@ function App() {
 
     } catch (reason) {
 
-      setError(friendlyError(reason));
+      reportError(friendlyError(reason));
 
     }
 
@@ -439,7 +473,7 @@ function App() {
 
     } catch (reason) {
 
-      setError(friendlyError(reason));
+      reportError(friendlyError(reason));
 
       try { await loadMessages(conversationId); } catch { /* Keep the visible error. */ }
 
@@ -507,19 +541,9 @@ function App() {
 
       });
 
-      if (!response.ok) throw await requestError(response);
-
-      setUser(null);
-      selectedId.current = null;
-      messageLoadVersion.current += 1;
-      pendingSubmissions.current.clear();
-      setDrafts({});
-
-      setConversations([]);
-
-      setSelected(null);
-
-      setMessages([]);
+      // 401: the session already ended on the server, so the student is signed out.
+      if (!response.ok && response.status !== 401) throw await requestError(response);
+      resetSession(false);
 
     } catch (reason) {
 
@@ -698,7 +722,7 @@ function App() {
             </div>
 
             <aside className="sidebar-stack">
-              <DocumentsPanel key={selected?.id ?? "none"} conversationId={selected?.id ?? null} onError={setError}
+              <DocumentsPanel key={selected?.id ?? "none"} conversationId={selected?.id ?? null} onError={reportError}
                 onDocumentDeleted={() => { if (selected) void loadMessages(selected.id); }} />
               <section className="status-panel">
 

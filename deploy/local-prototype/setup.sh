@@ -117,7 +117,12 @@ done
 target=/opt/smart-learning-local
 install -d -m 0755 "$target"
 if [[ "$source_dir" != "$target" ]]; then
-  tar -C "$source_dir" -cf - compose.yaml compose.lab.yaml compose.local-prototype.yaml backend frontend deploy scripts docs |
+  # Setup media carries a manifest tying this source to its Git revision.
+  revision_files=()
+  for item in deploy-manifest.sha256 deploy-revision.txt; do
+    [[ -f "$source_dir/$item" ]] && revision_files+=("$item")
+  done
+  tar -C "$source_dir" -cf - compose.yaml compose.lab.yaml compose.local-prototype.yaml backend frontend deploy scripts docs "${revision_files[@]}" |
     tar -C "$target" -xf -
 fi
 chmod +x "$target/deploy/local-prototype/stack.sh"

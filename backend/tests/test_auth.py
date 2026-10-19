@@ -1,3 +1,4 @@
+from datetime import timedelta
 from hashlib import sha256
 
 from fastapi.testclient import TestClient
@@ -5,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
-from app.models import LoginSession
+from app.models import LoginSession, utc_now
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, csrf_headers, login
 
 
@@ -106,3 +107,27 @@ def test_state_changes_require_matching_csrf_token_and_allowed_origin(
         json={"title": "Allowed"},
     )
     assert allowed.status_code == 201
+
+
+def test_login_prunes_expired_sessions_and_keeps_active_ones(
+    client: TestClient,
+    users,
+    session_factory: sessionmaker[Session],
+) -> None:
+    now = utc_now()
+    with session_factory() as db:
+        db.add_all([
+            LoginSession(user_id=users["bob"].id, token_hash="e" * 64, csrf_token_hash="e" * 64,
+                         expires_at=now - timedelta(hours=1)),
+            LoginSession(user_id=users["alice"].id, token_hash="f" * 64, csrf_token_hash="f" * 64,
+                         expires_at=now - timedelta(seconds=1)),
+            LoginSession(user_id=users["bob"].id, token_hash="a" * 64, csrf_token_hash="a" * 64,
+                         expires_at=now + timedelta(hours=1)),
+        ])
+        db.commit()
+    login(client, "alice@example.test")
+    with session_factory() as db:
+        remaining = set(db.scalars(select(LoginSession.token_hash)))
+    assert "e" * 64 not in remaining and "f" * 64 not in remaining
+    assert "a" * 64 in remaining
+    assert len(remaining) == 2  # Bob's active session and Alice's new one

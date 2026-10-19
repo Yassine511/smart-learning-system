@@ -28,25 +28,38 @@ logger = logging.getLogger("smart-learning-worker")
 
 def claim_job(factory: sessionmaker[Session]) -> UUID | None:
     now = utc_now()
+    settings = get_settings()
     with factory() as db:
-        job = db.scalar(
-            select(DocumentJob)
-            .where(or_(
-                and_(DocumentJob.status == "pending", DocumentJob.next_attempt_at <= now),
-                and_(DocumentJob.status == "running", DocumentJob.lease_until < now),
-            ))
-            .order_by(DocumentJob.next_attempt_at, DocumentJob.created_at)
-            .with_for_update(skip_locked=True)
-            .limit(1)
-        )
-        if job is None:
-            return None
-        job.status = "running"
-        job.attempts += 1
-        job.lease_until = now + timedelta(seconds=get_settings().worker_lease_seconds)
-        job.updated_at = now
-        db.commit()
-        return job.id
+        while True:
+            job = db.scalar(
+                select(DocumentJob)
+                .where(or_(
+                    and_(DocumentJob.status == "pending", DocumentJob.next_attempt_at <= now),
+                    and_(DocumentJob.status == "running", DocumentJob.lease_until < now),
+                ))
+                .order_by(DocumentJob.next_attempt_at, DocumentJob.created_at)
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
+            if job is None:
+                return None
+            if job.status == "running" and job.attempts >= settings.worker_max_attempts:
+                # The lease expired without _fail_job running, so the worker
+                # crashed or was killed while processing. Stop retrying a PDF
+                # that keeps taking the only worker down with it.
+                document = db.scalar(
+                    select(Document).where(Document.id == job.document_id).with_for_update()
+                )
+                _settle_failure(job, document, "processing_interrupted", retryable=False)
+                db.commit()
+                logger.warning("Document job %s abandoned after %s interrupted attempts", job.id, job.attempts)
+                continue
+            job.status = "running"
+            job.attempts += 1
+            job.lease_until = now + timedelta(seconds=settings.worker_lease_seconds)
+            job.updated_at = now
+            db.commit()
+            return job.id
 
 
 def renew_lease(factory: sessionmaker[Session], job_id: UUID) -> None:
@@ -163,32 +176,40 @@ def _fail_job(factory: sessionmaker[Session], job_id: UUID, code: str, retryable
         )
         if document is None:
             return
-        # A failure from an obsolete index must not undo deletion or a newer
-        # generation. Serialize this decision with the document API's locks.
-        if job.kind == "index" and (
-            document.status == "deleting" or document.index_generation != job.generation
-        ):
-            job.status = "completed"
-            job.error_code = None
-            job.lease_until = None
-            job.updated_at = utc_now()
-            db.commit()
-            return
-        job.error_code = code
-        job.lease_until = None
-        job.updated_at = utc_now()
-        if retryable and job.attempts < get_settings().worker_max_attempts:
-            job.status = "pending"
-            job.next_attempt_at = utc_now() + timedelta(seconds=min(300, 5 * (2 ** (job.attempts - 1))))
-            if job.kind == "index":
-                document.status = "pending"
-        else:
-            job.status = "failed"
-            if job.kind == "index":
-                document.status = "failed"
-        document.error_code = code
-        document.updated_at = utc_now()
+        _settle_failure(job, document, code, retryable)
         db.commit()
+
+
+def _settle_failure(
+    job: DocumentJob,
+    document: Document | None,
+    code: str,
+    retryable: bool,
+) -> None:
+    """Record a job failure; the caller holds the document row lock and commits."""
+    now = utc_now()
+    job.lease_until = None
+    job.updated_at = now
+    # A failure from an obsolete index must not undo deletion or a newer
+    # generation. Serialize this decision with the document API's locks.
+    if document is None or (job.kind == "index" and (
+        document.status == "deleting" or document.index_generation != job.generation
+    )):
+        job.status = "completed"
+        job.error_code = None
+        return
+    job.error_code = code
+    if retryable and job.attempts < get_settings().worker_max_attempts:
+        job.status = "pending"
+        job.next_attempt_at = now + timedelta(seconds=min(300, 5 * (2 ** (job.attempts - 1))))
+        if job.kind == "index":
+            document.status = "pending"
+    else:
+        job.status = "failed"
+        if job.kind == "index":
+            document.status = "failed"
+    document.error_code = code
+    document.updated_at = now
 
 
 def run_once(factory: sessionmaker[Session] | None = None) -> bool:

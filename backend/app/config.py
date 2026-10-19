@@ -36,9 +36,12 @@ class Settings(BaseSettings):
     retrieval_limit: int = Field(default=8, ge=1, le=30)
     retrieval_score_threshold: float = Field(default=0.55, ge=0, le=1)
     rag_citation_example: bool = False
+    rag_structured_output: bool = True
+    rag_citation_attempts: int = Field(default=2, ge=1, le=3)
     worker_lease_seconds: int = Field(default=300, ge=30, le=3600)
     worker_max_attempts: int = Field(default=3, ge=1, le=10)
     chat_queue_capacity: int = Field(default=4, ge=1, le=64)
+    chat_queue_user_capacity: int = Field(default=2, ge=1, le=64)
     chat_queue_wait_seconds: float = Field(default=60, gt=0, le=600)
     chat_generation_seconds: float = Field(default=150, gt=0, le=600)
     chat_history_messages: int = Field(default=12, ge=0, le=100)

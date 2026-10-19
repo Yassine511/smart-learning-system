@@ -33,6 +33,9 @@ export async function requestError(response: Response): Promise<UiError> {
   if (response.status === 401 && detail === "Invalid email or password") {
     return { ...base, message: "The email or password did not match.", nextStep: "Check your details and sign in again.", status: 401 };
   }
+  if (response.status === 429 && detail === "You already have the maximum number of pending replies") {
+    return { ...base, title: "Your replies are still running", message: "You already have the maximum number of answers waiting or in progress.", nextStep: "Wait for one of your other conversations to finish, then retry.", status: 429 };
+  }
   if (response.status === 429 && detail === "Too many sign-in attempts") {
     const retryAfter = Number(response.headers.get("Retry-After"));
     return {
@@ -87,6 +90,7 @@ export function documentFailure(code: string, deleting = false): UiError {
     embedding_service_unavailable: "The embedding service is unavailable.",
     vector_store_unavailable: "The vector database is unavailable.",
     file_missing: "The stored PDF is missing.",
+    processing_interrupted: "Processing stopped repeatedly before this PDF finished.",
   };
   return {
     title: "PDF needs attention",
@@ -95,7 +99,7 @@ export function documentFailure(code: string, deleting = false): UiError {
       ? "Retry deletion after the service recovers."
       : code === "image_only_pdf"
         ? "Upload a text PDF. Scanned pages need OCR."
-        : ["encrypted_pdf", "corrupt_pdf", "too_many_pages", "too_much_text"].includes(code)
+        : ["encrypted_pdf", "corrupt_pdf", "too_many_pages", "too_much_text", "processing_interrupted"].includes(code)
           ? "Prepare a readable, smaller PDF and upload it again."
           : "Retry indexing after the service recovers.",
   };

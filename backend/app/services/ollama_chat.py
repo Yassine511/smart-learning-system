@@ -15,7 +15,11 @@ class ChatFailure(Exception):
         super().__init__(code)
 
 
-def stream_chat(messages: list[dict[str, str]]) -> Iterator[str]:
+def stream_chat(
+    messages: list[dict[str, str]],
+    response_format: dict | None = None,
+) -> Iterator[str]:
+    """Stream content deltas; ``response_format`` is an Ollama JSON schema."""
     settings = get_settings()
     deadline = monotonic() + settings.chat_generation_seconds
     payload = {
@@ -27,6 +31,8 @@ def stream_chat(messages: list[dict[str, str]]) -> Iterator[str]:
             "num_predict": settings.chat_predict_tokens,
         },
     }
+    if response_format is not None:
+        payload["format"] = response_format
     if settings.ollama_think_mode != "off":
         payload["think"] = settings.ollama_think_mode
     if settings.ollama_num_threads:
