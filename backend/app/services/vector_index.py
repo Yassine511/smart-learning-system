@@ -67,15 +67,18 @@ def embed(texts: list[str], *, query: bool) -> list[list[float]]:
         return []
     settings = get_settings()
     prefix = "search_query: " if query else "search_document: "
+    payload = {
+        "model": settings.ollama_embed_model,
+        "input": [prefix + value for value in texts],
+        "truncate": False,
+    }
+    if settings.ollama_num_threads:
+        payload["options"] = {"num_thread": settings.ollama_num_threads}
     try:
         with _ollama_client() as client:
             response = client.post(
                 "/api/embed",
-                json={
-                    "model": settings.ollama_embed_model,
-                    "input": [prefix + value for value in texts],
-                    "truncate": False,
-                },
+                json=payload,
             )
             if response.status_code == 404:
                 raise IndexProblem("embedding_model_missing")

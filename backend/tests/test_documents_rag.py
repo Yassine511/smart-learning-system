@@ -7,11 +7,12 @@ from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from pypdf import PdfReader, PdfWriter
+import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import worker
 from app.api import messages as messages_api
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.models import Document, DocumentChunk, DocumentJob, utc_now
 from app.services import rag
 from app.services.pdf_files import stored_path
@@ -20,6 +21,22 @@ from tests.conftest import TEST_ORIGIN, csrf_headers, login
 
 FIXTURE = Path(__file__).parent / "fixtures" / "networking_notes.pdf"
 DIGEST = "a" * 64
+
+
+def test_citation_format_example_is_opt_in_and_keeps_actual_passages(monkeypatch):
+    source = rag.SourceCandidate(uuid4(), uuid4(), 1, "S1", "owned.pdf", 3, "The real owned passage.")
+    for enabled in (False, True):
+        monkeypatch.setattr(rag, "get_settings", lambda: Settings(_env_file=None, rag_citation_example=enabled))
+        prompt = rag.document_prompt("The actual question?", [source])
+        assert prompt[0]["role"] == "system"
+        assert prompt[-1]["role"] == "user"
+        assert "owned.pdf, page 3" in prompt[-1]["content"]
+        assert "The real owned passage." in prompt[-1]["content"]
+        assert "The actual question?" in prompt[-1]["content"]
+        assert [message["role"] for message in prompt] == (["system", "user", "assistant", "user"] if enabled else ["system", "user"])
+        if enabled:
+            assert "not evidence for the real question" in prompt[1]["content"]
+            assert prompt[2]["content"].endswith("[S1]")
 
 
 def fake_index(monkeypatch):
@@ -75,10 +92,12 @@ def conversation(client: TestClient, token: str) -> str:
     return response.json()["id"]
 
 
+@pytest.mark.parametrize("citation_example", [False, True])
 def test_upload_index_cited_chat_and_delete(
-    client: TestClient, users, session_factory: sessionmaker[Session], tmp_path, monkeypatch
+    client: TestClient, users, session_factory: sessionmaker[Session], tmp_path, monkeypatch, citation_example
 ) -> None:
     settings = get_settings()
+    monkeypatch.setattr(settings, "rag_citation_example", citation_example)
     old_root = settings.upload_root
     settings.upload_root = str(tmp_path)
     try:
@@ -118,6 +137,8 @@ def test_upload_index_cited_chat_and_delete(
         assert reply.status_code == 200
         assert "event: source" in reply.text
         assert "event: complete" in reply.text
+        assert any(item["content"] == "The sample is blue. [S1]" for item in prompts[0]) == citation_example
+        assert "PDF passages:" in prompts[0][-1]["content"]
         replay = client.post(
             chat_url,
             headers=csrf_headers(token),

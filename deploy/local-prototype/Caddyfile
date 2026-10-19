@@ -1,0 +1,11 @@
+{
+    admin off
+    auto_https disable_redirects
+    skip_install_trust
+}
+
+https://smart-learning.test {
+    bind 192.168.50.10
+    tls internal
+    reverse_proxy 127.0.0.1:8080
+}

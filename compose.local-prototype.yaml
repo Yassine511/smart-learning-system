@@ -1,0 +1,7 @@
+# Add after compose.yaml and compose.lab.yaml; use a separate .env/project.
+name: smart-learning-local
+services:
+  ollama:
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"

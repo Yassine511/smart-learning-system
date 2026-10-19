@@ -152,7 +152,7 @@ def document_prompt(question: str, sources: list[SourceCandidate]) -> list[dict[
         + chr(10) + source.quote
         for source in sources
     )
-    return [
+    messages = [
         {
             "role": "system",
             "content": (
@@ -163,8 +163,14 @@ def document_prompt(question: str, sources: list[SourceCandidate]) -> list[dict[
                 "say that the evidence is insufficient."
             ),
         },
-        {"role": "user", "content": "Question: " + question + chr(10) * 2 + "PDF passages:" + chr(10) + passages},
     ]
+    if get_settings().rag_citation_example:
+        messages.extend([
+            {"role": "user", "content": "Formatting example only, not evidence for the real question.\nPassage [S1]: The sample is blue.\nQuestion: What color is the sample?"},
+            {"role": "assistant", "content": "The sample is blue. [S1]"},
+        ])
+    messages.append({"role": "user", "content": "Question: " + question + chr(10) * 2 + "PDF passages:" + chr(10) + passages})
+    return messages
 
 
 def cited_sources(answer: str, sources: list[SourceCandidate]) -> list[SourceCandidate]:

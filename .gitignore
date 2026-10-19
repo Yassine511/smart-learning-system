@@ -5,6 +5,7 @@
 *.pem
 *.key
 secrets/
+.demo-credentials.json
 
 # User data, runtime state, and model weights
 data/
@@ -40,6 +41,7 @@ coverage/
 # Local editor and OS files
 .idea/
 .vscode/
+.vs/
 .DS_Store
 Thumbs.db
 *.log

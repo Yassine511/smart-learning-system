@@ -131,7 +131,7 @@ def _stream(
             history = _prompt(
                 factory, conversation_id, request_id, question, reserved_chars=reserved
             )[1:-1]
-            prompt = [rag_messages[0], *history, rag_messages[1]]
+            prompt = [rag_messages[0], *rag_messages[1:-1], *history, rag_messages[-1]]
         else:
             prompt = _prompt(factory, conversation_id, request_id, question)
         for delta in stream_chat(prompt):

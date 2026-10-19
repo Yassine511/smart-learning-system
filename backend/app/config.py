@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,6 +23,8 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://qdrant:6333"
     ollama_base_url: str = "http://ollama:11434"
     ollama_chat_model: str = "gpt-oss:20b"
+    ollama_think_mode: Literal["low", "medium", "high", "off"] = "low"
+    ollama_num_threads: int = Field(default=0, ge=0, le=256)
     ollama_embed_model: str = "nomic-embed-text"
     ollama_embed_digest: str = ""
     qdrant_collection_prefix: str = "smart_learning_chunks"
@@ -32,6 +35,7 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=4, ge=1, le=32)
     retrieval_limit: int = Field(default=8, ge=1, le=30)
     retrieval_score_threshold: float = Field(default=0.55, ge=0, le=1)
+    rag_citation_example: bool = False
     worker_lease_seconds: int = Field(default=300, ge=30, le=3600)
     worker_max_attempts: int = Field(default=3, ge=1, le=10)
     chat_queue_capacity: int = Field(default=4, ge=1, le=64)

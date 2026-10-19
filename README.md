@@ -2,13 +2,19 @@
 
 A Computer Networks project: a centralized, privately hosted AI learning platform serving multiple students over Tailscale. Students have separate accounts, conversations, PDFs, and document retrieval contexts.
 
-**Status (2026-09-23):** the application is deployed on the physical CasaOS
-server and uses its existing Ollama container. Live HTTPS sign-in, a saved
-GPT-OSS chat reply, PDF indexing, and PDF deletion passed. The six HTTP failure
-cases and Wireshark capture passed in an isolated local test. The separate
-three-VM course assessment remains to be run.
+**Status (2026-10-19):** the separate local three-VM prototype passed functional
+checks from both client VMs, including real chat, PDF retrieval, student
+isolation, simultaneous requests, and outage recovery. See the
+[acceptance record](docs/local-three-vm-acceptance.md) for measurements and the
+unresolved VirtualBox stability limits. Manual browser/Wireshark testing is in
+progress. The earlier physical CasaOS deployment and GPT-OSS configuration are
+preserved.
 
 ## Deployment decisions
+
+For the optional prototype using the three existing VirtualBox VMs on this PC,
+see [local three-VM setup](docs/local-three-vm.md). It uses local HTTPS and Qwen
+0.5B while preserving the physical-server configuration and GPT-OSS defaults.
 
 - Stage 1: validate the complete system in three VMs: one Ubuntu server VM and two client VMs.
 - The server VM runs the application, databases, private storage, and its own Ollama container. The lab does not depend on the physical server for inference.

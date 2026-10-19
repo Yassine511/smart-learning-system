@@ -2,14 +2,18 @@ from uuid import uuid4
 import json
 
 import httpx
+import pytest
 
+from app.config import Settings
 from app.services import vector_index
 from app.services.pdf_files import ExtractedChunk
 
 DIGEST = "b" * 64
 
 
-def test_embedding_api_uses_nomic_prefixes_and_resolves_digest(monkeypatch) -> None:
+@pytest.mark.parametrize("threads", [0, 1])
+def test_embedding_api_uses_nomic_prefixes_and_resolves_digest(monkeypatch, threads) -> None:
+    monkeypatch.setattr(vector_index, "get_settings", lambda: Settings(_env_file=None, ollama_num_threads=threads))
     requests = []
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -32,6 +36,11 @@ def test_embedding_api_uses_nomic_prefixes_and_resolves_digest(monkeypatch) -> N
     assert document_payload["input"] == ["search_document: TCP"]
     assert query_payload["input"] == ["search_query: TCP?"]
     assert document_payload["truncate"] is False
+    if threads:
+        assert document_payload["options"] == query_payload["options"] == {"num_thread": threads}
+    else:
+        assert "options" not in document_payload
+        assert "options" not in query_payload
 
 
 def test_qdrant_api_creates_collection_and_filters_queries(monkeypatch) -> None:

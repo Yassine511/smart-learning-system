@@ -22,12 +22,15 @@ def stream_chat(messages: list[dict[str, str]]) -> Iterator[str]:
         "model": settings.ollama_chat_model,
         "messages": messages,
         "stream": True,
-        "think": "low",
         "options": {
             "num_ctx": settings.chat_context_tokens,
             "num_predict": settings.chat_predict_tokens,
         },
     }
+    if settings.ollama_think_mode != "off":
+        payload["think"] = settings.ollama_think_mode
+    if settings.ollama_num_threads:
+        payload["options"]["num_thread"] = settings.ollama_num_threads
     timeout = httpx.Timeout(
         connect=5.0,
         read=settings.chat_generation_seconds,

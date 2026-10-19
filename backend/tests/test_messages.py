@@ -11,6 +11,7 @@ from app.models import Message, utc_now
 from app.services.chat_queue import ChatQueue
 from app.services.ollama_chat import ChatFailure
 from app.services import ollama_chat
+from app.config import Settings
 from tests.conftest import TEST_ORIGIN, csrf_headers, login
 
 
@@ -122,7 +123,14 @@ def test_chat_queue_is_fifo_and_bounded() -> None:
     assert queue.admit(2) is not None
 
 
-def test_ollama_adapter_streams_content_and_maps_missing_model(monkeypatch) -> None:
+@pytest.mark.parametrize("prototype", [False, True])
+def test_ollama_adapter_streams_content_and_maps_missing_model(monkeypatch, prototype) -> None:
+    settings = Settings(_env_file=None)
+    if prototype:
+        settings.ollama_chat_model = "qwen2.5:0.5b"
+        settings.ollama_think_mode = "off"
+        settings.ollama_num_threads = 1
+    monkeypatch.setattr(ollama_chat, "get_settings", lambda: settings)
     real_client = httpx.Client
     requests = []
 
@@ -144,7 +152,14 @@ def test_ollama_adapter_streams_content_and_maps_missing_model(monkeypatch) -> N
     assert requests[0].url.path == "/api/chat"
     assert requests[0].content
     assert b'"stream":true' in requests[0].content
-    assert b'"think":"low"' in requests[0].content
+    if prototype:
+        assert b'"think"' not in requests[0].content
+        assert b'"model":"qwen2.5:0.5b"' in requests[0].content
+        assert b'"num_thread":1' in requests[0].content
+    else:
+        assert b'"think":"low"' in requests[0].content
+        assert b'"model":"gpt-oss:20b"' in requests[0].content
+        assert b'"num_thread"' not in requests[0].content
 
     monkeypatch.setattr(
         ollama_chat.httpx, "Client",
