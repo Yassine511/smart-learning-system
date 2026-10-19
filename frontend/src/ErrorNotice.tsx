@@ -33,6 +33,17 @@ export async function requestError(response: Response): Promise<UiError> {
   if (response.status === 401 && detail === "Invalid email or password") {
     return { ...base, message: "The email or password did not match.", nextStep: "Check your details and sign in again.", status: 401 };
   }
+  if (response.status === 429 && detail === "Too many sign-in attempts") {
+    const retryAfter = Number(response.headers.get("Retry-After"));
+    return {
+      title: "Sign in temporarily limited",
+      message: "There have been too many sign-in attempts. Your details were not checked.",
+      nextStep: retryAfter > 0
+        ? `Wait ${retryAfter} seconds, then try signing in again.`
+        : "Wait a minute, then try signing in again.",
+      status: 429,
+    };
+  }
   return { ...base, status: response.status };
 }
 

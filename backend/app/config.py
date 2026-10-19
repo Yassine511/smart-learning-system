@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     csrf_cookie_name: str = "smart_learning_csrf"
     session_cookie_secure: bool = True
     session_ttl_hours: int = Field(default=12, ge=1, le=168)
+    login_account_attempts: int = Field(default=10, ge=1, le=10000)
+    login_global_attempts: int = Field(default=60, ge=1, le=10000)
+    login_window_seconds: int = Field(default=60, ge=1, le=3600)
+    login_max_concurrent: int = Field(default=2, ge=1, le=16)
 
     readiness_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     worker_poll_seconds: float = Field(default=15.0, ge=1, le=300)

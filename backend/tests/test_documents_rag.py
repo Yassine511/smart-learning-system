@@ -16,11 +16,65 @@ from app.config import Settings, get_settings
 from app.models import Document, DocumentChunk, DocumentJob, utc_now
 from app.services import rag
 from app.services.pdf_files import stored_path
+from app.services.pdf_files import DocumentProblem
 from app.services.vector_index import IndexProblem
 from tests.conftest import TEST_ORIGIN, csrf_headers, login
 
 FIXTURE = Path(__file__).parent / "fixtures" / "networking_notes.pdf"
 DIGEST = "a" * 64
+
+
+@pytest.mark.parametrize("retryable", [False, True])
+def test_delete_during_failed_indexing_stays_deleted(
+    client, users, session_factory, tmp_path, monkeypatch, retryable
+) -> None:
+    monkeypatch.setattr(get_settings(), "upload_root", str(tmp_path))
+    fake_index(monkeypatch)
+    token = login(client, "alice@example.test")
+    document_id = upload(client, token).json()["id"]
+    url = f"/api/documents/{document_id}"
+    path = stored_path(f"{users['alice'].id}/{document_id}.pdf")
+
+    def fail_after_delete(_texts, *, query):
+        assert client.delete(url, headers=csrf_headers(token)).status_code == 204
+        if retryable:
+            raise IndexProblem("embedding_service_unavailable")
+        raise DocumentProblem("corrupt_pdf")
+
+    monkeypatch.setattr(worker, "embed", fail_after_delete)
+    assert worker.run_once(session_factory)
+    document = client.get(url).json()
+    assert document["status"] == "deleting"
+    assert document["error_code"] is None
+    assert client.get(url + "/file").status_code == 404
+    assert worker.run_once(session_factory)
+    assert client.get(url).status_code == 404
+    assert not path.exists()
+    with session_factory() as db:
+        assert not db.query(DocumentJob).filter_by(document_id=UUID(document_id)).all()
+
+
+def test_obsolete_index_failure_does_not_change_new_generation(
+    client, users, session_factory, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "upload_root", str(tmp_path))
+    token = login(client, "alice@example.test")
+    document_id = UUID(upload(client, token).json()["id"])
+    with session_factory() as db:
+        job = db.query(DocumentJob).filter_by(document_id=document_id).one()
+        job.status = "running"
+        job.attempts = 1
+        job_id = job.id
+        document = db.get(Document, document_id)
+        document.index_generation = 2
+        document.status = "indexed"
+        db.commit()
+    worker._fail_job(session_factory, job_id, "embedding_service_unavailable", retryable=True)
+    with session_factory() as db:
+        document = db.get(Document, document_id)
+        assert document.status == "indexed"
+        assert document.error_code is None
+        assert db.get(DocumentJob, job_id).status == "completed"
 
 
 def test_citation_format_example_is_opt_in_and_keeps_actual_passages(monkeypatch):

@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import DocumentsPanel from "./DocumentsPanel";
 import SourceList, { type Source } from "./SourceList";
 import ErrorNotice, { chatFailure, friendlyError, requestError, type UiError } from "./ErrorNotice";
@@ -148,7 +148,14 @@ function App() {
 
   const [messages, setMessages] = useState<Message[]>([]);
 
-  const [draft, setDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draft = selected ? drafts[selected.id] ?? "" : "";
+  const selectedId = useRef<string | null>(null);
+  const messageLoadVersion = useRef(0);
+  const pendingSubmissions = useRef(new Map<string, { requestId: string; content: string }>());
+  const setDraft = (value: string) => {
+    if (selected) setDrafts((current) => ({ ...current, [selected.id]: value }));
+  };
 
   const [liveAnswer, setLiveAnswer] = useState("");
   const [liveSources, setLiveSources] = useState<Source[]>([]);
@@ -196,13 +203,16 @@ function App() {
 
 
   const loadMessages = useCallback(async (id: string) => {
-
-    const response = await fetch(`/api/conversations/${id}/messages`);
-
-    if (!response.ok) throw await requestError(response);
-
-    setMessages((await response.json()) as Message[]);
-
+    const version = ++messageLoadVersion.current;
+    const isCurrent = () => version === messageLoadVersion.current && selectedId.current === id;
+    try {
+      const response = await fetch(`/api/conversations/${id}/messages`);
+      if (!response.ok) throw await requestError(response);
+      const rows = (await response.json()) as Message[];
+      if (isCurrent()) setMessages(rows);
+    } catch (reason) {
+      if (isCurrent()) throw reason;
+    }
   }, []);
 
 
@@ -319,11 +329,11 @@ function App() {
 
       await loadConversations();
 
+      selectedId.current = created.id;
+      messageLoadVersion.current += 1;
       setSelected(created);
 
       setMessages([]);
-
-      setDraft("");
 
     } catch (reason) {
 
@@ -341,6 +351,8 @@ function App() {
 
   const openConversation = async (conversation: Conversation) => {
 
+    selectedId.current = conversation.id;
+    messageLoadVersion.current += 1;
     setSelected(conversation);
 
     setMessages([]);
@@ -409,6 +421,16 @@ function App() {
 
         if (name === "complete") setChatStatus("Completed");
 
+        if (name === "complete" || name === "failed") {
+          // Only a terminal event resolves an uncertain submission. Preserve
+          // newer edits and reuse the UUID if the connection fails beforehand.
+          setDrafts((current) => current[conversationId]?.trim() === content
+            ? { ...current, [conversationId]: "" } : current);
+          if (pendingSubmissions.current.get(conversationId)?.requestId === requestId) {
+            pendingSubmissions.current.delete(conversationId);
+          }
+        }
+
       });
 
       await loadMessages(conversationId);
@@ -444,9 +466,10 @@ function App() {
 
     const content = draft.trim();
 
-    setDraft("");
-
-    void sendChat(selected.id, crypto.randomUUID(), content);
+    const pending = pendingSubmissions.current.get(selected.id);
+    const requestId = pending?.content === content ? pending.requestId : crypto.randomUUID();
+    pendingSubmissions.current.set(selected.id, { requestId, content });
+    void sendChat(selected.id, requestId, content);
 
   };
 
@@ -487,6 +510,10 @@ function App() {
       if (!response.ok) throw await requestError(response);
 
       setUser(null);
+      selectedId.current = null;
+      messageLoadVersion.current += 1;
+      pendingSubmissions.current.clear();
+      setDrafts({});
 
       setConversations([]);
 
@@ -671,7 +698,7 @@ function App() {
             </div>
 
             <aside className="sidebar-stack">
-              <DocumentsPanel conversationId={selected?.id ?? null} onError={setError}
+              <DocumentsPanel key={selected?.id ?? "none"} conversationId={selected?.id ?? null} onError={setError}
                 onDocumentDeleted={() => { if (selected) void loadMessages(selected.id); }} />
               <section className="status-panel">
 

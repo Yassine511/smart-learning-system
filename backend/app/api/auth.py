@@ -6,6 +6,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.models import User
 from app.schemas import LoginRequest, LoginResponse, UserRead
+from app.services.login_throttle import LoginThrottled, login_throttle
 from app.security import (
     AuthContext,
     create_login_session,
@@ -73,9 +74,18 @@ def login(
     db: Session = Depends(get_db),
 ) -> LoginResponse:
     require_allowed_origin(request)
-    user = db.scalar(select(User).where(User.email == normalize_email(payload.email)))
-    password_hash = user.password_hash if user is not None else dummy_password_hash
-    password_valid = verify_password(payload.password, password_hash)
+    email = normalize_email(payload.email)
+    try:
+        with login_throttle.attempt(email):
+            user = db.scalar(select(User).where(User.email == email))
+            password_hash = user.password_hash if user is not None else dummy_password_hash
+            password_valid = verify_password(payload.password, password_hash)
+    except LoginThrottled as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many sign-in attempts",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
     if user is None or not password_valid or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

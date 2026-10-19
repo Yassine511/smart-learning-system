@@ -62,7 +62,9 @@ def renew_lease(factory: sessionmaker[Session], job_id: UUID) -> None:
 def _index_document(factory: sessionmaker[Session], job_id: UUID) -> None:
     with factory() as db:
         job = db.get(DocumentJob, job_id)
-        document = db.get(Document, job.document_id) if job else None
+        document = db.scalar(
+            select(Document).where(Document.id == job.document_id).with_for_update()
+        ) if job else None
         if document is None or document.status == "deleting" or document.index_generation != job.generation:
             if job is not None:
                 job.status = "completed"
@@ -156,8 +158,21 @@ def _fail_job(factory: sessionmaker[Session], job_id: UUID, code: str, retryable
         job = db.get(DocumentJob, job_id)
         if job is None:
             return
-        document = db.get(Document, job.document_id)
+        document = db.scalar(
+            select(Document).where(Document.id == job.document_id).with_for_update()
+        )
         if document is None:
+            return
+        # A failure from an obsolete index must not undo deletion or a newer
+        # generation. Serialize this decision with the document API's locks.
+        if job.kind == "index" and (
+            document.status == "deleting" or document.index_generation != job.generation
+        ):
+            job.status = "completed"
+            job.error_code = None
+            job.lease_until = None
+            job.updated_at = utc_now()
+            db.commit()
             return
         job.error_code = code
         job.lease_until = None

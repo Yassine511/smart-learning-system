@@ -116,6 +116,7 @@ Local verification:
 cd backend
 python -m pytest -q
 cd ../frontend
+npm test
 npm run build
 ```
 

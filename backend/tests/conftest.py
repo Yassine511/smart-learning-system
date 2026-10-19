@@ -16,6 +16,14 @@ TEST_ORIGIN = "https://smart-learning.test"
 TEST_PASSWORD = "correct-horse-battery-staple"
 
 
+@pytest.fixture(autouse=True)
+def isolated_login_throttle(monkeypatch) -> None:
+    from app.api import auth
+    from app.services.login_throttle import LoginThrottle
+
+    monkeypatch.setattr(auth, "login_throttle", LoginThrottle())
+
+
 @pytest.fixture
 def session_factory() -> Generator[sessionmaker[Session], None, None]:
     engine = create_engine(
