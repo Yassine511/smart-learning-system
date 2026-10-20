@@ -1,0 +1,18 @@
+flowchart TB
+  subgraph NORMAL[Normal communication]
+    C0[VM_2 client - 192.168.50.11] -->|Direct Ethernet frames| S0[VM1 server - 192.168.50.10]
+  end
+  subgraph LAB[Isolated VirtualBox internal network: labnet]
+    C[VM_2 target client - 192.168.50.11]
+    A[VM4_Attacker - 192.168.50.13]
+    S[VM1 server - 192.168.50.10]
+    C <-->|Poisoned ARP mapping| A
+    A <-->|HTTP proxy: observe / modify / inject / drop| S
+    A -.->|HTTPS forwarded as encrypted TLS| S
+    C2[VM3 comparison client - 192.168.50.12]
+    C2 <-->|Direct HTTP / verified HTTPS when staged on| S
+    S --> HTTP[Separate synthetic HTTP service - port 8008]
+    S --> HTTPS[Existing Smart Learning application - HTTPS 443]
+  end
+  H[Windows host - SSH management on loopback only]
+  H -.->|2221 / 2222 / 2223 / 2224| LAB

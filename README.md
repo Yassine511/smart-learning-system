@@ -148,4 +148,8 @@ See [M4 document setup](docs/m4-documents.md) for embedding-model setup, job rec
 
 See [M5 HTTP failure simulation and Wireshark evidence](docs/m5-http-failures.md) for the six response cases, error screens, local capture, and limits of that capture.
 
+See [the isolated MITM lab](docs/mitm-lab.md) for the fourth attacker VM, synthetic
+HTTP demonstrations, HTTPS protection check, Wireshark evidence, and recovery.
+The runbook distinguishes implemented tooling from completed live acceptance.
+
 See [physical server deployment](docs/physical-server-deployment.md) for the CasaOS stack, existing Ollama connection, access URL, and operational checks.
