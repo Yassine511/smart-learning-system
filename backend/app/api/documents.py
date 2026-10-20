@@ -17,13 +17,6 @@ from app.services.pdf_files import DocumentProblem, clean_filename, save_upload,
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
-def clean_display_name(display_name: str) -> str:
-    clean = display_name.strip()
-    if not clean:
-        raise HTTPException(status_code=422, detail="Document name cannot be blank")
-    return clean
-
-
 @router.get("", response_model=list[DocumentRead])
 def list_documents(
     auth: AuthContext = Depends(get_current_auth),
@@ -122,7 +115,7 @@ def update_document(
     document = owned_document(db, document_id, auth.user.id)
     if document.status == "deleting":
         raise HTTPException(status_code=409, detail="Document is being deleted")
-    document.display_name = clean_display_name(payload.display_name)
+    document.display_name = payload.display_name
     document.updated_at = utc_now()
     db.commit()
     db.refresh(document)
@@ -135,12 +128,7 @@ def retry_document(
     auth: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ) -> Document:
-    document = owned_document(db, document_id, auth.user.id)
-    document = db.scalar(
-        select(Document).where(
-            Document.id == document_id, Document.user_id == auth.user.id
-        ).with_for_update()
-    )
+    document = owned_document(db, document_id, auth.user.id, for_update=True)
     if document.status not in {"failed", "indexed"}:
         raise HTTPException(status_code=409, detail="Document is not ready for reindexing")
     document.index_generation += 1
@@ -164,12 +152,7 @@ def delete_document(
     auth: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ) -> None:
-    document = owned_document(db, document_id, auth.user.id)
-    document = db.scalar(
-        select(Document).where(
-            Document.id == document_id, Document.user_id == auth.user.id
-        ).with_for_update()
-    )
+    document = owned_document(db, document_id, auth.user.id, for_update=True)
     if document.status == "deleting":
         active = db.scalar(
             select(DocumentJob.id).where(

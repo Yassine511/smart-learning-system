@@ -1,5 +1,4 @@
 export type Source = {
-  id?: string;
   document_id: string;
   chunk_id: string;
   marker: string;

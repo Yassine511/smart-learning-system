@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from app.config import get_settings
 from app.db import get_engine
+from app.services.vector_index import embed_model_entries
 
 
 @dataclass(frozen=True)
@@ -18,18 +19,14 @@ class ComponentStatus:
         return asdict(self)
 
 
-def _http_probe(url: str, expected_json_key: str | None = None) -> ComponentStatus:
+def _http_probe(url: str) -> ComponentStatus:
     timeout = get_settings().readiness_timeout_seconds
     try:
         with urlopen(url, timeout=timeout) as response:
             if not 200 <= response.status < 300:
                 return ComponentStatus(False, f"HTTP {response.status}")
-            if expected_json_key is not None:
-                body = json.load(response)
-                if expected_json_key not in body:
-                    return ComponentStatus(False, "unexpected response")
         return ComponentStatus(True, "reachable")
-    except (HTTPError, URLError, OSError, TimeoutError, json.JSONDecodeError):
+    except (HTTPError, URLError, OSError, TimeoutError):
         return ComponentStatus(False, "unreachable")
 
 
@@ -66,21 +63,15 @@ def check_ollama() -> ComponentStatus:
             }
             if settings.ollama_chat_model not in available:
                 return ComponentStatus(False, "chat model missing")
-            embed_names = {settings.ollama_embed_model}
-            if ":" not in settings.ollama_embed_model:
-                embed_names.add(settings.ollama_embed_model + ":latest")
-            if not embed_names.intersection(available):
+            embed_entries = embed_model_entries(models)
+            if not embed_entries:
                 return ComponentStatus(False, "embedding model missing")
-            if settings.ollama_embed_digest:
-                matching = [
-                    item for item in models if isinstance(item, dict)
-                    and (item.get("name") in embed_names or item.get("model") in embed_names)
-                ]
-                if not any(
-                    item.get("digest", "").lower() == settings.ollama_embed_digest.lower()
-                    for item in matching if isinstance(item.get("digest"), str)
-                ):
-                    return ComponentStatus(False, "embedding digest mismatch")
+            if settings.ollama_embed_digest and not any(
+                isinstance(item.get("digest"), str)
+                and item["digest"].lower() == settings.ollama_embed_digest.lower()
+                for item in embed_entries
+            ):
+                return ComponentStatus(False, "embedding digest mismatch")
             return ComponentStatus(True, "chat and embedding models installed")
     except (HTTPError, URLError, OSError, TimeoutError, ValueError, AttributeError):
         return ComponentStatus(False, "unreachable")

@@ -33,13 +33,13 @@ class User(Base):
     )
 
     sessions: Mapped[list["LoginSession"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
     conversations: Mapped[list["Conversation"]] = relationship(
-        back_populates="owner", cascade="all, delete-orphan"
+        back_populates="owner", cascade="all, delete-orphan", passive_deletes=True
     )
     documents: Mapped[list["Document"]] = relationship(
-        back_populates="owner", cascade="all, delete-orphan"
+        back_populates="owner", cascade="all, delete-orphan", passive_deletes=True
     )
 
 
@@ -68,7 +68,7 @@ class Conversation(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
+        ForeignKey("users.id", ondelete="CASCADE")
     )
     title: Mapped[str] = mapped_column(String(160), default="New conversation")
     created_at: Mapped[datetime] = mapped_column(
@@ -80,10 +80,10 @@ class Conversation(Base):
 
     owner: Mapped[User] = relationship(back_populates="conversations")
     messages: Mapped[list["Message"]] = relationship(
-        back_populates="conversation", cascade="all, delete-orphan"
+        back_populates="conversation", cascade="all, delete-orphan", passive_deletes=True
     )
     document_links: Mapped[list["ConversationDocument"]] = relationship(
-        back_populates="conversation", cascade="all, delete-orphan"
+        back_populates="conversation", cascade="all, delete-orphan", passive_deletes=True
     )
 
 
@@ -93,7 +93,7 @@ class Document(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
+        ForeignKey("users.id", ondelete="CASCADE")
     )
     original_filename: Mapped[str] = mapped_column(String(255))
     display_name: Mapped[str] = mapped_column(String(255))
@@ -112,13 +112,13 @@ class Document(Base):
 
     owner: Mapped[User] = relationship(back_populates="documents")
     chunks: Mapped[list["DocumentChunk"]] = relationship(
-        back_populates="document", cascade="all, delete-orphan"
+        back_populates="document", cascade="all, delete-orphan", passive_deletes=True
     )
     jobs: Mapped[list["DocumentJob"]] = relationship(
-        back_populates="document", cascade="all, delete-orphan"
+        back_populates="document", cascade="all, delete-orphan", passive_deletes=True
     )
     conversation_links: Mapped[list["ConversationDocument"]] = relationship(
-        back_populates="document", cascade="all, delete-orphan"
+        back_populates="document", cascade="all, delete-orphan", passive_deletes=True
     )
 
 
@@ -148,7 +148,7 @@ class Message(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     conversation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+        ForeignKey("conversations.id", ondelete="CASCADE")
     )
     request_id: Mapped[UUID] = mapped_column()
     role: Mapped[str] = mapped_column(String(16))
@@ -163,7 +163,8 @@ class Message(Base):
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
     sources: Mapped[list["MessageSource"]] = relationship(
-        back_populates="message", cascade="all, delete-orphan", order_by="MessageSource.marker"
+        back_populates="message", cascade="all, delete-orphan", passive_deletes=True,
+        order_by="MessageSource.marker",
     )
 
 
@@ -199,10 +200,10 @@ class DocumentChunk(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     document_id: Mapped[UUID] = mapped_column(
-        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+        ForeignKey("documents.id", ondelete="CASCADE")
     )
     user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
+        ForeignKey("users.id", ondelete="CASCADE")
     )
     generation: Mapped[int] = mapped_column(Integer)
     page_number: Mapped[int] = mapped_column(Integer)

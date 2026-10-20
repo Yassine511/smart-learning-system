@@ -30,6 +30,16 @@ def _qdrant_client() -> httpx.Client:
     )
 
 
+def embed_model_entries(models: list) -> list[dict]:
+    """Entries of an Ollama ``/api/tags`` list naming the configured embedding model."""
+    requested = get_settings().ollama_embed_model
+    aliases = {requested} if ":" in requested else {requested, f"{requested}:latest"}
+    return [
+        model for model in models
+        if isinstance(model, dict) and (model.get("name") in aliases or model.get("model") in aliases)
+    ]
+
+
 def embedding_digest() -> str:
     settings = get_settings()
     try:
@@ -39,19 +49,14 @@ def embedding_digest() -> str:
             models = response.json().get("models", [])
     except (httpx.HTTPError, ValueError) as exc:
         raise IndexProblem("embedding_service_unavailable") from exc
-    requested = settings.ollama_embed_model
-    aliases = {requested}
-    if ":" not in requested:
-        aliases.add(f"{requested}:latest")
-    for model in models:
-        if model.get("name") in aliases or model.get("model") in aliases:
-            digest = model.get("digest")
-            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
-                raise IndexProblem("embedding_digest_unavailable")
-            digest = digest.lower()
-            if settings.ollama_embed_digest and digest != settings.ollama_embed_digest.lower():
-                raise IndexProblem("embedding_digest_mismatch", retryable=False)
-            return digest
+    for model in embed_model_entries(models):
+        digest = model.get("digest")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+            raise IndexProblem("embedding_digest_unavailable")
+        digest = digest.lower()
+        if settings.ollama_embed_digest and digest != settings.ollama_embed_digest.lower():
+            raise IndexProblem("embedding_digest_mismatch", retryable=False)
+        return digest
     raise IndexProblem("embedding_model_missing")
 
 
@@ -141,10 +146,8 @@ def upsert_chunks(
             "payload": {
                 "user_id": str(user_id),
                 "document_id": str(document_id),
-                "chunk_id": str(chunk.id),
                 "generation": generation,
                 "model_digest": digest,
-                "page_number": chunk.page_number,
             },
         }
         for chunk, vector in zip(chunks, vectors, strict=True)

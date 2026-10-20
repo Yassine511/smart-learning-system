@@ -1,5 +1,30 @@
 name: smart-learning-system
 
+# The API and the worker run the same image; naming it lets Compose build it once.
+x-backend-env: &backend-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://smart_learning:change-me-before-deployment@postgres:5432/smart_learning}
+  QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+  OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-gpt-oss:20b}
+  OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+  image: ${COMPOSE_PROJECT_NAME}-backend
+  env_file:
+    - path: ./.env
+      required: false
+  environment: *backend-env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    qdrant:
+      condition: service_healthy
+  volumes:
+    - private_uploads:/data/uploads
+  restart: unless-stopped
+
 services:
   postgres:
     image: postgres:17.11-alpine
@@ -28,17 +53,9 @@ services:
     restart: unless-stopped
 
   backend:
-    build:
-      context: ./backend
-    env_file:
-      - path: ./.env
-        required: false
+    <<: *backend-common
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://smart_learning:change-me-before-deployment@postgres:5432/smart_learning}
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-gpt-oss:20b}
-      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      <<: *backend-env
       APP_ORIGIN: ${APP_ORIGIN:-https://smart-learning.test}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://smart-learning.test}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
@@ -46,41 +63,15 @@ services:
       - sh
       - -c
       - alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000
-    depends_on:
-      postgres:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"]
       interval: 10s
       timeout: 5s
       retries: 6
-    volumes:
-      - private_uploads:/data/uploads
-    restart: unless-stopped
 
   worker:
-    build:
-      context: ./backend
+    <<: *backend-common
     command: ["python", "-m", "app.worker"]
-    env_file:
-      - path: ./.env
-        required: false
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://smart_learning:change-me-before-deployment@postgres:5432/smart_learning}
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-gpt-oss:20b}
-      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-    volumes:
-      - private_uploads:/data/uploads
-    restart: unless-stopped
 
   web:
     build:

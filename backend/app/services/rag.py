@@ -94,60 +94,64 @@ def retrieve(
         return []
 
     vector = embed([question], query=True)[0]
-    hits = query_points(name, vector, user_id, list(allowed))
-    candidates: list[SourceCandidate] = []
+    threshold = get_settings().retrieval_score_threshold
+    hits: list[tuple[UUID, dict]] = []
+    for hit in query_points(name, vector, user_id, list(allowed)):
+        try:
+            chunk_id = UUID(str(hit["id"]))
+            payload = hit["payload"]
+            score = hit["score"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        if isinstance(payload, dict) and isinstance(score, (int, float)) and score >= threshold:
+            hits.append((chunk_id, payload))
+    if not hits:
+        return []
+
+    # PostgreSQL is authoritative. Qdrant payload alone grants no access, so
+    # every hit must still be a current, indexed chunk attached to this chat.
     with factory() as db:
-        for hit in hits:
-            if len(candidates) >= 4:
-                break
-            try:
-                chunk_id = UUID(str(hit["id"]))
-                payload = hit["payload"]
-                score = hit["score"]
-                chunk = db.get(DocumentChunk, chunk_id)
-            except (ValueError, KeyError, TypeError):
-                continue
-            if (
-                not isinstance(payload, dict)
-                or not isinstance(score, (int, float))
-                or score < get_settings().retrieval_score_threshold
-                or chunk is None
-                or chunk.document_id not in allowed
-            ):
-                continue
-            document = allowed[chunk.document_id]
-            if (
-                chunk.user_id != user_id
-                or chunk.generation != document.index_generation
-                or payload.get("user_id") != str(user_id)
-                or payload.get("document_id") != str(document.id)
-                or payload.get("generation") != chunk.generation
-                or payload.get("model_digest") != digest
-            ):
-                continue
-            # PostgreSQL is authoritative. Qdrant payload alone grants no access.
-            current = db.scalar(
-                select(Document.id)
+        chunks = {
+            chunk.id: chunk
+            for chunk in db.scalars(
+                select(DocumentChunk)
+                .join(Document, Document.id == DocumentChunk.document_id)
                 .join(ConversationDocument, ConversationDocument.document_id == Document.id)
                 .where(
-                    Document.id == document.id,
+                    DocumentChunk.id.in_([chunk_id for chunk_id, _ in hits]),
+                    DocumentChunk.user_id == user_id,
+                    DocumentChunk.generation == Document.index_generation,
                     Document.user_id == user_id,
                     Document.status == "indexed",
-                    Document.index_generation == chunk.generation,
                     ConversationDocument.conversation_id == conversation_id,
                 )
             )
-            if current is None:
-                continue
-            candidates.append(SourceCandidate(
-                chunk_id=chunk.id,
-                document_id=document.id,
-                generation=chunk.generation,
-                marker=f"S{len(candidates) + 1}",
-                filename=document.display_name,
-                page_number=chunk.page_number,
-                quote=chunk.content[:900],
-            ))
+        }
+    candidates: list[SourceCandidate] = []
+    for chunk_id, payload in hits:
+        if len(candidates) >= 4:
+            break
+        chunk = chunks.get(chunk_id)
+        if chunk is None or chunk.document_id not in allowed:
+            continue
+        document = allowed[chunk.document_id]
+        if (
+            chunk.generation != document.index_generation
+            or payload.get("user_id") != str(user_id)
+            or payload.get("document_id") != str(document.id)
+            or payload.get("generation") != chunk.generation
+            or payload.get("model_digest") != digest
+        ):
+            continue
+        candidates.append(SourceCandidate(
+            chunk_id=chunk.id,
+            document_id=document.id,
+            generation=chunk.generation,
+            marker=f"S{len(candidates) + 1}",
+            filename=document.display_name,
+            page_number=chunk.page_number,
+            quote=chunk.content,
+        ))
     return candidates
 
 

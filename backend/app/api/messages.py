@@ -15,7 +15,7 @@ from app.api.ownership import owned_conversation
 from app.config import get_settings
 from app.db import get_db, get_session_factory
 from app.models import Conversation, Message, utc_now
-from app.schemas import MessageCreate, MessageRead
+from app.schemas import MessageCreate, MessageRead, MessageSourceRead
 from app.security import AuthContext, get_current_auth, require_csrf
 from app.services.chat_queue import QueueFull, chat_queue
 from app.services.ollama_chat import ChatFailure, stream_chat
@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api/conversations", tags=["messages"])
 # Nginx and other proxies from timing out the otherwise silent stream.
 KEEPALIVE = ": keepalive\n\n"
 KEEPALIVE_SECONDS = 15.0
+SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
 
 def get_chat_session_factory() -> sessionmaker[Session]:
@@ -167,7 +168,7 @@ def _stream(
             history = _prompt(
                 factory, conversation_id, request_id, question, reserved_chars=reserved
             )[1:-1]
-            prompt = [rag_messages[0], *rag_messages[1:-1], *history, rag_messages[-1]]
+            prompt = [*rag_messages[:-1], *history, rag_messages[-1]]
         else:
             prompt = _prompt(factory, conversation_id, request_id, question)
         if candidates and settings.rag_structured_output:
@@ -275,15 +276,8 @@ def send_message(
     db: Session = Depends(get_db),
     factory: sessionmaker[Session] = Depends(get_chat_session_factory),
 ) -> StreamingResponse:
-    question = payload.content.strip()
-    if not question:
-        raise HTTPException(status_code=422, detail="Message cannot be blank")
-    owned_conversation(db, conversation_id, auth.user.id)
-    conversation = db.scalar(
-        select(Conversation).where(
-            Conversation.id == conversation_id, Conversation.user_id == auth.user.id
-        ).with_for_update()
-    )
+    question = payload.content
+    conversation = owned_conversation(db, conversation_id, auth.user.id, for_update=True)
     _expire_stale(db, conversation_id)
     previous_user = db.scalar(
         select(Message).where(
@@ -304,15 +298,7 @@ def send_message(
             raise HTTPException(status_code=409, detail="Request ID already used")
         if previous_assistant.status == "completed":
             saved_sources = [
-                {
-                    "document_id": str(source.document_id),
-                    "chunk_id": str(source.chunk_id),
-                    "marker": source.marker,
-                    "filename": source.filename,
-                    "page_number": source.page_number,
-                    "quote": source.quote,
-                    "unavailable": source.unavailable,
-                }
+                MessageSourceRead.model_validate(source).model_dump(mode="json", exclude={"id"})
                 for source in previous_assistant.sources
             ]
             return StreamingResponse(
@@ -326,7 +312,7 @@ def send_message(
                     }),
                 ]),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+                headers=SSE_HEADERS,
             )
         if previous_assistant.status in {"queued", "running"}:
             raise HTTPException(status_code=409, detail="Request already in progress")
@@ -393,5 +379,5 @@ def send_message(
     return StreamingResponse(
         _stream(factory, ticket, assistant.id, conversation_id, payload.request_id, question, auth.user.id, scope),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        headers=SSE_HEADERS,
     )

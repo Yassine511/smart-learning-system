@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.models import LoginSession, User
+from app.models import LoginSession, User, utc_now
 from app.schemas import LoginRequest, LoginResponse, UserRead
 from app.services.login_throttle import LoginThrottled, login_throttle
 from app.security import (
@@ -15,7 +15,6 @@ from app.security import (
     normalize_email,
     require_allowed_origin,
     require_csrf,
-    utc_now,
     verify_password,
 )
 

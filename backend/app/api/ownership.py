@@ -11,13 +11,13 @@ def owned_conversation(
     db: Session,
     conversation_id: UUID,
     user_id: UUID,
+    for_update: bool = False,
 ) -> Conversation:
-    conversation = db.scalar(
-        select(Conversation).where(
-            Conversation.id == conversation_id,
-            Conversation.user_id == user_id,
-        )
+    query = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.user_id == user_id,
     )
+    conversation = db.scalar(query.with_for_update() if for_update else query)
     if conversation is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -30,13 +30,13 @@ def owned_document(
     db: Session,
     document_id: UUID,
     user_id: UUID,
+    for_update: bool = False,
 ) -> Document:
-    document = db.scalar(
-        select(Document).where(
-            Document.id == document_id,
-            Document.user_id == user_id,
-        )
+    query = select(Document).where(
+        Document.id == document_id,
+        Document.user_id == user_id,
     )
+    document = db.scalar(query.with_for_update() if for_update else query)
     if document is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

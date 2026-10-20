@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { csrfToken } from "./csrf";
 import ErrorNotice, { documentFailure, friendlyError, requestError, type UiError } from "./ErrorNotice";
 
 type Document = {
@@ -10,11 +11,6 @@ type Document = {
   page_count: number | null;
   size_bytes: number;
 };
-
-function csrfToken(): string {
-  const cookie = document.cookie.split("; ").find((item) => item.startsWith("smart_learning_csrf="));
-  return cookie ? decodeURIComponent(cookie.split("=", 2)[1]) : "";
-}
 
 export default function DocumentsPanel({
   conversationId,
@@ -54,8 +50,11 @@ export default function DocumentsPanel({
     });
   }, [conversationId, loadAttached, onError]);
 
+  // Depend on whether any document is still changing, not on the list itself,
+  // so each poll's new list does not tear down and recreate the timer.
+  const polling = documents.some((item) => ["pending", "indexing", "deleting"].includes(item.status));
   useEffect(() => {
-    if (!documents.some((item) => ["pending", "indexing", "deleting"].includes(item.status))) return;
+    if (!polling) return;
     const timer = window.setInterval(() => {
       void loadDocuments().catch((reason: unknown) => {
         // Background polling stays quiet except when the session has ended.
@@ -64,7 +63,7 @@ export default function DocumentsPanel({
       });
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [documents, loadDocuments, onError]);
+  }, [polling, loadDocuments, onError]);
 
   const upload = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

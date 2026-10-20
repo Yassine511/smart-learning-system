@@ -18,16 +18,6 @@ from app.security import AuthContext, get_current_auth, require_csrf
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 
-def clean_title(title: str) -> str:
-    clean = title.strip()
-    if not clean:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Title cannot be blank",
-        )
-    return clean
-
-
 @router.get("", response_model=list[ConversationRead])
 def list_conversations(
     auth: AuthContext = Depends(get_current_auth),
@@ -54,7 +44,7 @@ def create_conversation(
 ) -> Conversation:
     conversation = Conversation(
         user_id=auth.user.id,
-        title=clean_title(payload.title),
+        title=payload.title,
     )
     db.add(conversation)
     db.commit()
@@ -79,7 +69,7 @@ def update_conversation(
     db: Session = Depends(get_db),
 ) -> Conversation:
     conversation = owned_conversation(db, conversation_id, auth.user.id)
-    conversation.title = clean_title(payload.title)
+    conversation.title = payload.title
     conversation.updated_at = utc_now()
     db.commit()
     db.refresh(conversation)

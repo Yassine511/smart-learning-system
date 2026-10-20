@@ -5,16 +5,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
-COPY app ./app
-COPY alembic.ini ./
-COPY migrations ./migrations
-
-RUN pip install --no-cache-dir .
-
 RUN addgroup --system app && adduser --system --ingroup app app \
     && mkdir -p /data/uploads \
-    && chown -R app:app /app /data/uploads
+    && chown app:app /app /data/uploads
+
+# Install dependencies before copying the code, so a code-only change reuses
+# this cached layer instead of reinstalling every package.
+COPY pyproject.toml README.md ./
+RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']))" > /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+COPY --chown=app:app app ./app
+COPY --chown=app:app alembic.ini ./
+COPY --chown=app:app migrations ./migrations
+
+RUN pip install --no-cache-dir --no-deps .
 
 USER app
 

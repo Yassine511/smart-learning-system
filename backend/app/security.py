@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 import hashlib
 import hmac
 import secrets
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
 from app.db import get_db
-from app.models import LoginSession, User
+from app.models import LoginSession, User, utc_now
 
 password_hasher = PasswordHasher(type=Type.ID)
 dummy_password_hash = password_hasher.hash("not-a-real-user-password")
@@ -40,10 +40,6 @@ def hash_token(token: str) -> str:
 
 def new_opaque_token() -> str:
     return secrets.token_urlsafe(32)
-
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 @dataclass(frozen=True)

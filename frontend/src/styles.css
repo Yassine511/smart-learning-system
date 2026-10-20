@@ -241,45 +241,6 @@ h2 {
   letter-spacing: -0.04em;
 }
 
-.beacon {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: #ba6d45;
-  box-shadow: 0 0 0 8px rgba(186, 109, 69, 0.13);
-}
-
-.beacon.ready {
-  background: #2e8065;
-  box-shadow: 0 0 0 8px rgba(46, 128, 101, 0.13);
-}
-
-.service-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
-  margin: 32px 0;
-  background: #d8dad4;
-  border: 1px solid #d8dad4;
-}
-
-.service-card {
-  min-height: 154px;
-  padding: 24px;
-  background: #fbfaf6;
-}
-
-.service-state {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #68736f;
-  font-size: 0.78rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
 .dot {
   width: 8px;
   height: 8px;
@@ -289,23 +250,6 @@ h2 {
 
 .dot.ok {
   background: #2e8065;
-}
-
-.service-card h3 {
-  margin: 25px 0 6px;
-  font-size: 1rem;
-}
-
-.service-card p,
-.error {
-  margin: 0;
-  color: #68736f;
-  font-size: 0.9rem;
-}
-
-.error {
-  padding: 18px 0 0;
-  color: #963e33;
 }
 
 button {
@@ -371,10 +315,6 @@ footer {
 
   .workspace-heading > p {
     margin-top: 18px;
-  }
-
-  .service-grid {
-    grid-template-columns: 1fr;
   }
 
   footer {

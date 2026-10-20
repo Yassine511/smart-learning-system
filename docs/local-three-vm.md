@@ -235,6 +235,21 @@ real login/logout, secured cookies, CSRF/ownership errors, saved chat, simultane
 student requests, PDF upload/index/download/delete, and cited document chat.
 `--skip-rag` produces diagnostic results only and cannot pass full acceptance.
 
+Three narrower checks produced the remaining acceptance evidence. Each runs
+inside a client VM with the client venv's Python, signs in with the synthetic
+accounts in `~/.demo-credentials.json`, and records no answer text:
+
+- `scripts/verify_vm_concurrent_chat.py --role client1|client2 --start-at <epoch>
+  --output <file>` sends one real chat from each client at the same agreed
+  moment (at most 60 seconds ahead), to show that simultaneous students are served.
+- `scripts/verify_vm_recovery.py --phase <phase> --state <file>` runs, in order,
+  `prepare`, `rag`, `restarted` (after restarting backend/worker), `outage`
+  (with Ollama stopped), `recovered` (after starting it again) and `cleanup`,
+  accumulating every phase in one state file.
+- `scripts/verify_vm_browser.py --student 1|2 --output <file>
+  [--expect-unavailable]` drives the guest Firefox through geckodriver with
+  certificate checks enabled; `--expect-unavailable` checks the model-outage notice.
+
 Verify persistence by creating a conversation and indexed PDF in the UI,
 restarting backend/worker, and confirming the same resources are available:
 

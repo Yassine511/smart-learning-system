@@ -88,8 +88,7 @@ def test_qdrant_api_creates_collection_and_filters_queries(monkeypatch) -> None:
     assert point["id"] == str(chunk_id)
     assert point["payload"] == {
         "user_id": str(user_id), "document_id": str(document_id),
-        "chunk_id": str(chunk_id), "generation": 2,
-        "model_digest": DIGEST, "page_number": 1,
+        "generation": 2, "model_digest": DIGEST,
     }
     query = next(request for request in requests if request.url.path.endswith("/points/query"))
     conditions = json.loads(query.content)["filter"]["must"]

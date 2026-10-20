@@ -1,7 +1,14 @@
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+
+
+# Stripped before validation, so whitespace-only input is rejected as blank.
+ConversationTitle = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
+DocumentName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+MessageText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
 
 
 class UserRead(BaseModel):
@@ -23,11 +30,11 @@ class LoginResponse(BaseModel):
 
 
 class ConversationCreate(BaseModel):
-    title: str = Field(default="New conversation", min_length=1, max_length=160)
+    title: ConversationTitle = "New conversation"
 
 
 class ConversationUpdate(BaseModel):
-    title: str = Field(min_length=1, max_length=160)
+    title: ConversationTitle
 
 
 class ConversationRead(BaseModel):
@@ -40,7 +47,7 @@ class ConversationRead(BaseModel):
 
 
 class DocumentUpdate(BaseModel):
-    display_name: str = Field(min_length=1, max_length=255)
+    display_name: DocumentName
 
 
 class DocumentRead(BaseModel):
@@ -57,10 +64,9 @@ class DocumentRead(BaseModel):
     updated_at: datetime
 
 
-
 class MessageCreate(BaseModel):
     request_id: UUID
-    content: str = Field(min_length=1, max_length=4000)
+    content: MessageText
 
 
 class MessageSourceRead(BaseModel):
