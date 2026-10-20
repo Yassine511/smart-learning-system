@@ -46,6 +46,47 @@ function enter(content: string) {
 }
 function submit() { fireEvent.click(screen.getByRole("button", { name: "Send message" })); }
 
+test("PDF search sends QUERY JSON and renders a passage with its page link", async () => {
+  const ordinaryFetch = fetch;
+  const searchRequest = vi.fn(async (_options?: RequestInit) => json([{
+    chunk_id: "chunk", document_id: "doc", marker: "S1", filename: "networking.pdf",
+    page_number: 2, quote: "TCP uses acknowledgements.",
+  }]));
+  vi.stubGlobal("fetch", async (url: string, options?: RequestInit) => {
+    if (url === "/api/documents/search") return searchRequest(options);
+    return ordinaryFetch(url, options);
+  });
+  await open();
+  fireEvent.change(screen.getByLabelText("Search my PDFs"), { target: { value: "  TCP reliability  " } });
+  fireEvent.click(screen.getByRole("button", { name: "Search PDFs" }));
+  await screen.findByText("TCP uses acknowledgements.");
+  expect(searchRequest).toHaveBeenCalledWith({
+    method: "QUERY", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query: "TCP reliability", limit: 5 }),
+  });
+  expect(screen.getByRole("link", { name: "[S1] networking.pdf, page 2" }).getAttribute("href"))
+    .toBe("/api/documents/doc/file#page=2");
+});
+
+test("PDF search shows an empty result and handles service errors", async () => {
+  const ordinaryFetch = fetch;
+  let failed = false;
+  vi.stubGlobal("fetch", async (url: string, options?: RequestInit) => {
+    if (url === "/api/documents/search") return failed ? json({ detail: "vector_store_unavailable" }, 503) : json([]);
+    return ordinaryFetch(url, options);
+  });
+  await open();
+  expect((screen.getByRole("button", { name: "Search PDFs" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText("Search my PDFs"), { target: { value: "TCP" } });
+  fireEvent.click(screen.getByRole("button", { name: "Search PDFs" }));
+  await screen.findByText("No matching passages in your indexed PDFs.");
+  failed = true;
+  fireEvent.click(screen.getByRole("button", { name: "Search PDFs" }));
+  await screen.findByText("Service unavailable");
+  expect((screen.getByLabelText("Search my PDFs") as HTMLInputElement).value).toBe("TCP");
+  expect(screen.queryByText("No matching passages in your indexed PDFs.")).toBeNull();
+});
+
 test("a late response cannot replace the newly selected conversation", async () => {
   const a = deferred<Response>();
   messages = async (url) => url.includes("/A/") ? a.promise : json(history("B", "B reply"));

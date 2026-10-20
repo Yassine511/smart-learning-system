@@ -2,26 +2,78 @@
 
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.ownership import owned_document
-from app.db import get_db
+from app.db import get_db, get_session_factory
 from app.models import Document, DocumentJob, MessageSource, utc_now
-from app.schemas import DocumentRead, DocumentUpdate
+from app.schemas import DocumentRead, DocumentSearch, DocumentUpdate, SearchHit
 from app.security import AuthContext, get_current_auth, require_csrf
 from app.services.pdf_files import DocumentProblem, clean_filename, save_upload, storage_key, stored_path
+from app.services.rag import search_documents as semantic_search
+from app.services.vector_index import IndexProblem
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
+SEARCH_HEADERS = {"Cache-Control": "no-store", "Vary": "Cookie", "Accept-Query": "application/json"}
+
+
+def get_search_session_factory() -> sessionmaker[Session]:
+    return get_session_factory()
+
+
+def require_search_json(request: Request) -> None:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if not content_type:
+        raise HTTPException(status_code=400, detail="Content-Type is required", headers=SEARCH_HEADERS)
+    if content_type != "application/json":
+        raise HTTPException(status_code=415, detail="application/json is required", headers=SEARCH_HEADERS)
+
+
+# Reserve this literal path before /{document_id}; otherwise GET /search
+# matches that route and returns a UUID validation error instead of 405.
+@router.api_route(
+    "/search", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"],
+    include_in_schema=False,
+)
+def unsupported_search_method() -> None:
+    raise HTTPException(status_code=405, detail="Method Not Allowed", headers={"Allow": "QUERY", **SEARCH_HEADERS})
+
+
+@router.api_route(
+    "/search", methods=["QUERY"], response_model=list[SearchHit],
+    dependencies=[Depends(require_search_json)],
+    # FastAPI's built-in OpenAPI body-method list predates QUERY.
+    openapi_extra={"requestBody": {"required": True, "content": {
+        "application/json": {"schema": {"$ref": "#/components/schemas/DocumentSearch"}},
+    }}},
+)
+def search_documents(
+    payload: DocumentSearch,
+    response: Response,
+    auth: AuthContext = Depends(get_current_auth),
+    factory: sessionmaker[Session] = Depends(get_search_session_factory),
+) -> list[dict]:
+    # Sync routes run in FastAPI's threadpool, including model/vector I/O.
+    response.headers.update(SEARCH_HEADERS)
+    try:
+        return [source.public() for source in semantic_search(
+            factory, auth.user.id, payload.query, payload.document_ids, payload.limit,
+        )]
+    except IndexProblem as exc:
+        raise HTTPException(status_code=503, detail="vector_store_unavailable", headers=SEARCH_HEADERS) from exc
 
 
 @router.get("", response_model=list[DocumentRead])
 def list_documents(
+    response: Response,
     auth: AuthContext = Depends(get_current_auth),
     db: Session = Depends(get_db),
 ) -> list[Document]:
+    # Accept-Query is scoped to /search, advertised on that resource above.
+    response.headers["Link"] = '</api/documents/search>; rel="search"; type="application/json"'
     return list(
         db.scalars(
             select(Document)

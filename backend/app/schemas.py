@@ -2,7 +2,9 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+from app.config import get_settings
 
 
 # Stripped before validation, so whitespace-only input is rejected as blank.
@@ -48,6 +50,28 @@ class ConversationRead(BaseModel):
 
 class DocumentUpdate(BaseModel):
     display_name: DocumentName
+
+
+class DocumentSearch(BaseModel):
+    query: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+    document_ids: list[UUID] | None = Field(default=None, max_length=50)
+    limit: int = Field(default_factory=lambda: min(5, get_settings().retrieval_limit), ge=1, le=30)
+
+    @field_validator("limit")
+    @classmethod
+    def within_retrieval_limit(cls, value: int) -> int:
+        if value > get_settings().retrieval_limit:
+            raise ValueError("limit exceeds the configured retrieval limit")
+        return value
+
+
+class SearchHit(BaseModel):
+    chunk_id: UUID
+    document_id: UUID
+    marker: str
+    filename: str
+    page_number: int
+    quote: str
 
 
 class DocumentRead(BaseModel):

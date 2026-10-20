@@ -1,4 +1,4 @@
-"""Conversation-scoped retrieval and verified citation snapshots."""
+"""Owned document search, conversation retrieval, and verified citation snapshots."""
 
 from dataclasses import dataclass
 import json
@@ -93,10 +93,51 @@ def retrieve(
     if not allowed:
         return []
 
-    vector = embed([question], query=True)[0]
+    return _verified_search(factory, user_id, question, allowed, digest, name, 4, conversation_id)
+
+
+def search_documents(
+    factory: sessionmaker[Session],
+    user_id: UUID,
+    text: str,
+    document_ids: list[UUID] | None = None,
+    limit: int = 5,
+) -> list[SourceCandidate]:
+    """Search current indexed PDFs owned by the caller without creating chat state."""
+    with factory() as db:
+        statement = select(Document).where(Document.user_id == user_id, Document.status == "indexed")
+        if document_ids is not None:
+            statement = statement.where(Document.id.in_(document_ids))
+        documents = list(db.scalars(statement))
+    if not documents:
+        return []
+    digest = embedding_digest()
+    name = collection_name(digest)
+    allowed = {
+        document.id: document for document in documents
+        if document.embedding_digest == digest and document.index_collection == name
+    }
+    if not allowed:
+        return []
+    return _verified_search(factory, user_id, text, allowed, digest, name, limit)
+
+
+def _verified_search(
+    factory: sessionmaker[Session],
+    user_id: UUID,
+    text: str,
+    allowed: dict[UUID, Document],
+    digest: str,
+    name: str,
+    limit: int,
+    conversation_id: UUID | None = None,
+) -> list[SourceCandidate]:
+    vector = embed([text], query=True)[0]
     threshold = get_settings().retrieval_score_threshold
     hits: list[tuple[UUID, dict]] = []
     for hit in query_points(name, vector, user_id, list(allowed)):
+        if not isinstance(hit, dict):
+            continue
         try:
             chunk_id = UUID(str(hit["id"]))
             payload = hit["payload"]
@@ -109,40 +150,46 @@ def retrieve(
         return []
 
     # PostgreSQL is authoritative. Qdrant payload alone grants no access, so
-    # every hit must still be a current, indexed chunk attached to this chat.
+    # every hit must still be an owned, current indexed chunk. Chat retrieval
+    # additionally requires its conversation attachment to remain present.
     with factory() as db:
-        chunks = {
-            chunk.id: chunk
-            for chunk in db.scalars(
-                select(DocumentChunk)
-                .join(Document, Document.id == DocumentChunk.document_id)
-                .join(ConversationDocument, ConversationDocument.document_id == Document.id)
-                .where(
-                    DocumentChunk.id.in_([chunk_id for chunk_id, _ in hits]),
-                    DocumentChunk.user_id == user_id,
-                    DocumentChunk.generation == Document.index_generation,
-                    Document.user_id == user_id,
-                    Document.status == "indexed",
-                    ConversationDocument.conversation_id == conversation_id,
-                )
+        statement = (
+            select(DocumentChunk, Document)
+            .join(Document, Document.id == DocumentChunk.document_id)
+            .where(
+                DocumentChunk.id.in_([chunk_id for chunk_id, _ in hits]),
+                DocumentChunk.user_id == user_id,
+                DocumentChunk.generation == Document.index_generation,
+                Document.id.in_(allowed),
+                Document.user_id == user_id,
+                Document.status == "indexed",
+                Document.embedding_digest == digest,
+                Document.index_collection == name,
             )
-        }
+        )
+        if conversation_id is not None:
+            statement = statement.join(
+                ConversationDocument, ConversationDocument.document_id == Document.id,
+            ).where(ConversationDocument.conversation_id == conversation_id)
+        chunks = {chunk.id: (chunk, document) for chunk, document in db.execute(statement)}
     candidates: list[SourceCandidate] = []
+    seen: set[UUID] = set()
     for chunk_id, payload in hits:
-        if len(candidates) >= 4:
+        if len(candidates) >= limit:
             break
-        chunk = chunks.get(chunk_id)
-        if chunk is None or chunk.document_id not in allowed:
+        row = chunks.get(chunk_id)
+        if row is None or chunk_id in seen:
             continue
-        document = allowed[chunk.document_id]
+        chunk, document = row
         if (
-            chunk.generation != document.index_generation
+            chunk.generation != allowed[document.id].index_generation
             or payload.get("user_id") != str(user_id)
             or payload.get("document_id") != str(document.id)
             or payload.get("generation") != chunk.generation
             or payload.get("model_digest") != digest
         ):
             continue
+        seen.add(chunk_id)
         candidates.append(SourceCandidate(
             chunk_id=chunk.id,
             document_id=document.id,

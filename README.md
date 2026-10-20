@@ -97,6 +97,8 @@ Milestones 02 through 04 routes:
 - List, create, read, rename, and delete private conversations.
 - Upload, list, read, rename, view/download, reindex, and delete owned PDFs.
   Upload returns 202 while the worker indexes pages and chunks.
+- Search owned indexed PDFs with `QUERY /api/documents/search` and the
+  **Search my PDFs** form; see [HTTP QUERY implementation and evidence](docs/http-query.md).
 - Attach/detach indexed owned documents to owned conversations.
 - List private message history and submit a normal chat request with a UUID.
   The POST response streams queued, running, delta, and terminal events.

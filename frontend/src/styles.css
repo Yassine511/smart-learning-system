@@ -356,6 +356,12 @@ footer {
 .upload-form { display: grid; gap: 12px; margin: 24px 0; }
 .upload-form input { width: 100%; max-width: 100%; }
 .upload-form button { justify-self: start; }
+.document-search-form { display: grid; gap: 12px; margin: 24px 0; }
+.document-search-form input { width: 100%; min-width: 0; }
+.document-search-form button { justify-self: start; }
+.document-search-results { margin-bottom: 20px; overflow-wrap: anywhere; }
+.document-search-results:empty { display: none; }
+.document-search-results p { color: #68736f; font-size: 0.84rem; }
 .document-list { display: grid; gap: 1px; background: #d8dad4; border: 1px solid #d8dad4; }
 .document-list article { display: grid; gap: 8px; padding: 16px; background: #fbfaf6; overflow-wrap: anywhere; }
 .document-list small { color: #68736f; }

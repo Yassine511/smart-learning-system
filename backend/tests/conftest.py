@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.api.messages import get_chat_session_factory
+from app.api.documents import get_search_session_factory
 from app.models import User
 from app.security import hash_password
 
@@ -47,6 +48,7 @@ def session_factory() -> Generator[sessionmaker[Session], None, None]:
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_chat_session_factory] = lambda: factory
+    app.dependency_overrides[get_search_session_factory] = lambda: factory
     try:
         yield factory
     finally:

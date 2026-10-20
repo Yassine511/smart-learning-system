@@ -186,6 +186,179 @@ def conversation(client: TestClient, token: str) -> str:
     return response.json()["id"]
 
 
+SEARCH_URL = "/api/documents/search"
+
+
+def test_query_schema_includes_json_request_body():
+    from app.main import app
+
+    operation = app.openapi()["paths"][SEARCH_URL]["query"]
+    assert operation["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/DocumentSearch",
+    }
+
+
+@pytest.fixture
+def searchable_pdf(client, users, session_factory, tmp_path, monkeypatch):
+    monkeypatch.setattr(get_settings(), "upload_root", str(tmp_path))
+    points = fake_index(monkeypatch)
+    token = login(client, "alice@example.test")
+    document_id = upload(client, token).json()["id"]
+    assert worker.run_once(session_factory)
+    return document_id, points, token
+
+
+def test_query_search_is_repeatable_read_only_and_needs_no_chat(client, session_factory, searchable_pdf, monkeypatch):
+    document_id, points, _token = searchable_pdf
+    embedded = []
+
+    def embedding(texts, *, query):
+        embedded.append((texts, query))
+        return [[0.4, 0.6]]
+
+    monkeypatch.setattr(rag, "embed", embedding)
+    with session_factory() as db:
+        before = {table.name: list(db.execute(table.select()).all()) for table in Document.metadata.sorted_tables}
+    first = client.request("QUERY", SEARCH_URL, json={"query": "  TCP acknowledgements  ", "limit": 1})
+    second = client.request("QUERY", SEARCH_URL, json={"query": "TCP acknowledgements", "limit": 1})
+    assert first.status_code == 200
+    assert first.json() == second.json()
+    assert first.headers["cache-control"] == "no-store"
+    assert first.headers["vary"] == "Cookie"
+    assert first.headers["accept-query"] == "application/json"
+    hit = first.json()[0]
+    assert set(hit) == {"chunk_id", "document_id", "marker", "filename", "page_number", "quote"}
+    assert hit["document_id"] == document_id
+    assert hit["chunk_id"] in points
+    assert hit["marker"] == "S1"
+    assert hit["filename"] == "networking_notes.pdf"
+    assert hit["page_number"] == 1
+    assert "acknowledgements" in hit["quote"]
+    assert embedded == [(["TCP acknowledgements"], True)] * 2
+    assert client.get(f"/api/documents/{document_id}/file").status_code == 200
+    with session_factory() as db:
+        after = {table.name: list(db.execute(table.select()).all()) for table in Document.metadata.sorted_tables}
+    assert before == after
+    assert '</api/documents/search>' in client.get("/api/documents").headers["link"]
+
+
+def test_query_document_filter_and_more_than_four_hits(client, session_factory, searchable_pdf):
+    document_id, _points, token = searchable_pdf
+    second_id = upload(client, token).json()["id"]
+    upload(client, token)
+    assert worker.run_once(session_factory)
+    assert worker.run_once(session_factory)
+    response = client.request("QUERY", SEARCH_URL, json={"query": "networks", "limit": 5})
+    assert response.status_code == 200
+    assert [hit["marker"] for hit in response.json()] == ["S1", "S2", "S3", "S4", "S5"]
+    filtered = client.request("QUERY", SEARCH_URL, json={"query": "networks", "document_ids": [second_id]})
+    assert {hit["document_id"] for hit in filtered.json()} == {second_id}
+    for ids in ([], [str(uuid4())]):
+        assert client.request("QUERY", SEARCH_URL, json={"query": "networks", "document_ids": ids}).json() == []
+
+
+def test_query_cross_student_guessed_ids_never_expose_chunks(client, session_factory, searchable_pdf):
+    alice_id, _points, _token = searchable_pdf
+    token = login(client, "bob@example.test")
+    bob_id = upload(client, token).json()["id"]
+    assert worker.run_once(session_factory)
+    # fake_index deliberately ignores Qdrant filters and returns both users' hits.
+    for ids in (None, [alice_id, bob_id], [bob_id]):
+        response = client.request("QUERY", SEARCH_URL, json={"query": "TCP", "document_ids": ids})
+        assert response.status_code == 200
+        assert {hit["document_id"] for hit in response.json()} == {bob_id}
+    assert client.request("QUERY", SEARCH_URL, json={"query": "TCP", "document_ids": [alice_id]}).json() == []
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+def test_search_wrong_methods_are_405(client, method):
+    response = client.request(method, SEARCH_URL)
+    assert response.status_code == 405
+    assert response.headers["allow"] == "QUERY"
+    assert response.headers["accept-query"] == "application/json"
+
+
+def test_query_requires_authentication(client):
+    assert client.request("QUERY", SEARCH_URL, json={"query": "TCP"}).status_code == 401
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"query": ""}, {"query": " \t\n"}, {"query": "x" * 2001},
+    {"query": "TCP", "limit": 0}, {"query": "TCP", "limit": 31},
+    {"query": "TCP", "document_ids": ["invalid"]},
+    {"query": "TCP", "document_ids": [str(uuid4())] * 51},
+])
+def test_query_validates_body(client, users, payload):
+    login(client, "alice@example.test")
+    assert client.request("QUERY", SEARCH_URL, json=payload).status_code == 422
+
+
+def test_query_respects_configured_limit(client, searchable_pdf, monkeypatch):
+    monkeypatch.setattr(get_settings(), "retrieval_limit", 1)
+    assert len(client.request("QUERY", SEARCH_URL, json={"query": "TCP"}).json()) == 1
+    assert client.request("QUERY", SEARCH_URL, json={"query": "TCP", "limit": 2}).status_code == 422
+
+
+@pytest.mark.parametrize("content_type,expected", [(None, 400), ("text/plain", 415)])
+def test_query_requires_json_media_type(client, users, content_type, expected):
+    login(client, "alice@example.test")
+    headers = {"Content-Type": content_type} if content_type else {}
+    response = client.request("QUERY", SEARCH_URL, content='{"query":"TCP"}', headers=headers)
+    assert response.status_code == expected
+
+
+@pytest.mark.parametrize("dependency", ["query_points", "embed", "embedding_digest"])
+def test_query_index_failure_is_503(client, searchable_pdf, monkeypatch, dependency):
+    def unavailable(*_args, **_kwargs):
+        raise IndexProblem("internal_dependency_details")
+    monkeypatch.setattr(rag, dependency, unavailable)
+    response = client.request("QUERY", SEARCH_URL, json={"query": "TCP"})
+    assert response.status_code == 503
+    assert response.json() == {"detail": "vector_store_unavailable"}
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("change", ["status", "generation", "digest", "collection", "payload", "score", "deleted"])
+def test_query_rechecks_hits_after_vector_lookup(client, session_factory, searchable_pdf, monkeypatch, change):
+    document_id, points, _token = searchable_pdf
+
+    def raced_lookup(*_args):
+        hits = list(points.values())
+        with session_factory() as db:
+            document = db.get(Document, UUID(document_id))
+            if change == "status":
+                document.status = "deleting"
+            elif change == "generation":
+                document.index_generation += 1
+            elif change == "digest":
+                document.embedding_digest = "b" * 64
+            elif change == "collection":
+                document.index_collection = "old_collection"
+            elif change == "deleted":
+                db.delete(document)
+            db.commit()
+        for hit in hits:
+            if change == "payload":
+                hit["payload"]["user_id"] = str(uuid4())
+            elif change == "score":
+                hit["score"] = 0.01
+        return hits
+
+    monkeypatch.setattr(rag, "query_points", raced_lookup)
+    response = client.request("QUERY", SEARCH_URL, json={"query": "TCP"})
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_query_skips_malformed_and_duplicate_vector_hits(client, searchable_pdf, monkeypatch):
+    _document_id, points, _token = searchable_pdf
+    hits = list(points.values())
+    monkeypatch.setattr(rag, "query_points", lambda *_: [None, {}, {"id": "bad"}, hits[0], hits[0], *hits[1:]])
+    response = client.request("QUERY", SEARCH_URL, json={"query": "TCP"})
+    assert response.status_code == 200
+    assert len(response.json()) == len(points)
+
+
 @pytest.mark.parametrize("citation_example", [False, True])
 def test_upload_index_cited_chat_and_delete(
     client: TestClient, users, session_factory: sessionmaker[Session], tmp_path, monkeypatch, citation_example

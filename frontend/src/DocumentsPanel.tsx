@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { csrfToken } from "./csrf";
 import ErrorNotice, { documentFailure, friendlyError, requestError, type UiError } from "./ErrorNotice";
+import SourceList, { type Source } from "./SourceList";
 
 type Document = {
   id: string;
@@ -24,6 +25,9 @@ export default function DocumentsPanel({
   const [documents, setDocuments] = useState<Document[]>([]);
   const [attached, setAttached] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState<Source[] | null>(null);
 
   const loadDocuments = useCallback(async () => {
     const response = await fetch("/api/documents");
@@ -83,6 +87,25 @@ export default function DocumentsPanel({
     } finally { setBusy(false); }
   };
 
+  const search = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const text = query.trim();
+    if (!text || busy) return;
+    setBusy(true); setSearching(true); setResults(null); onError(null);
+    try {
+      const response = await fetch("/api/documents/search", {
+        method: "QUERY",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: text, limit: 5 }),
+      });
+      if (!response.ok) throw await requestError(response);
+      const hits = await response.json() as Omit<Source, "unavailable">[];
+      setResults(hits.map((hit) => ({ ...hit, unavailable: false })));
+    } catch (reason) {
+      onError(friendlyError(reason));
+    } finally { setBusy(false); setSearching(false); }
+  };
+
   const attach = async (document: Document) => {
     if (!conversationId) return;
     setBusy(true); onError(null);
@@ -111,6 +134,7 @@ export default function DocumentsPanel({
       });
       if (!response.ok) throw await requestError(response);
       await loadDocuments();
+      setResults(null);
     } catch (reason) {
       onError(friendlyError(reason));
     } finally { setBusy(false); }
@@ -124,6 +148,7 @@ export default function DocumentsPanel({
       });
       if (!response.ok) throw await requestError(response);
       await loadDocuments();
+      setResults(null);
     } catch (reason) {
       onError(friendlyError(reason));
     } finally { setBusy(false); }
@@ -138,6 +163,7 @@ export default function DocumentsPanel({
       });
       if (!response.ok) throw await requestError(response);
       await loadDocuments();
+      setResults(null);
       if (conversationId) await loadAttached(conversationId);
       onDocumentDeleted();
     } catch (reason) {
@@ -154,6 +180,23 @@ export default function DocumentsPanel({
         <input id="pdf-upload" name="file" type="file" accept=".pdf,application/pdf" required />
         <button type="submit" disabled={busy}>Upload PDF</button>
       </form>
+      <form className="document-search-form" onSubmit={(event) => void search(event)}>
+        <label htmlFor="pdf-search">Search my PDFs</label>
+        <input id="pdf-search" type="search" value={query} maxLength={2000} required
+          placeholder="Find a passage in your indexed PDFs"
+          disabled={searching}
+          onChange={(event) => { setQuery(event.target.value); setResults(null); }} />
+        <button type="submit" disabled={busy || !query.trim()}>{searching ? "Searching…" : "Search PDFs"}</button>
+      </form>
+      <div className="document-search-results" role="status" aria-live="polite" aria-busy={searching}>
+        {searching ? <p>Searching your indexed PDFs…</p> : null}
+        {results !== null ? (
+          <>
+            <p>{results.length ? `${results.length} matching passages` : "No matching passages in your indexed PDFs."}</p>
+            <SourceList sources={results} />
+          </>
+        ) : null}
+      </div>
       <div className="document-list">
         {documents.map((document) => (
           <article key={document.id}>
