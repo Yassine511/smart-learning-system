@@ -26,6 +26,10 @@ see [local three-VM setup](docs/local-three-vm.md). It uses local HTTPS and Qwen
 
 The physical server and its installed models were inspected during deployment. See [physical server deployment](docs/physical-server-deployment.md) for the current endpoint, Compose commands, model pin, and verified checks.
 
+For the temporary public professor demo hosted on this Windows PC and VM1, see
+[professor demo](docs/professor-demo.md) for the Funnel URL, measured checks,
+private credential location, and start/stop commands.
+
 ## Architecture
 
 ```mermaid
